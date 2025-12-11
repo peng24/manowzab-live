@@ -3,9 +3,8 @@
 <head>
     <base target="_top">
     <meta charset="UTF-8">
-    <!-- iPad Optimization: viewport-fit=cover for full screen on notch devices -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Manowzab Command Center V113.10 (Fullscreen & Sound Fix)</title>
+    <title>Manowzab Command Center V113.11 (Fix Manual & Admin Booking)</title>
     
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -25,11 +24,10 @@
             --disabled: #555;
             --vacant-price: #ffd700;
         }
-        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; } /* Remove tap highlight on iOS */
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { 
             font-family: 'Kanit', sans-serif; background-color: var(--bg); color: var(--text); margin: 0; padding: 0; 
             height: 100vh; display: flex; flex-direction: column; overflow: hidden;
-            /* Safe Area Support for iPad/iPhone */
             padding-bottom: env(safe-area-inset-bottom); 
             padding-left: env(safe-area-inset-left);
             padding-right: env(safe-area-inset-right);
@@ -40,7 +38,7 @@
             background: #252525; border-bottom: 1px solid #333;
             display: flex; flex-direction: column; padding: 10px 20px; flex-shrink: 0; gap: 10px;
             position: relative; z-index: 100;
-            padding-top: max(10px, env(safe-area-inset-top)); /* Adjust for notch */
+            padding-top: max(10px, env(safe-area-inset-top));
         }
         .header-controls { 
             display: flex; gap: 8px; align-items: center; width: 100%; overflow-x: visible; padding-bottom: 5px; 
@@ -109,15 +107,16 @@
         }
         .blinking-border { animation: blinkBorder 1s infinite; animation-iteration-count: 15; }
 
-        /* AWAY BANNER - FIX Z-INDEX & VISIBILITY */
+        /* AWAY BANNER */
         .away-banner {
             position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
             background: linear-gradient(45deg, #6a1b9a, #8e24aa);
             color: white; padding: 10px 25px; border-radius: 30px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.6); z-index: 9999; /* Maximum Priority */
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6); z-index: 9999;
             display: none; align-items: center; gap: 15px;
             font-size: 1.2em; border: 2px solid #ce93d8;
             animation: pulseAi 2s infinite; white-space: nowrap;
+            top: max(60px, calc(env(safe-area-inset-top) + 60px));
         }
         .away-timer { font-family: monospace; font-size: 1.3em; font-weight: bold; background: rgba(0,0,0,0.3); padding: 2px 8px; border-radius: 5px; }
         .away-btn { background: #fff; color: #6a1b9a; border: none; padding: 5px 15px; border-radius: 20px; font-weight: bold; cursor: pointer; }
@@ -221,7 +220,7 @@
             <div class="status-dot" id="status-dot"></div>
             <div class="live-viewers" id="view-counter">👁️ 0</div>
             <div class="live-title" id="live-title">Offline Mode</div>
-            <div class="version-badge" style="margin-left: auto;">V113.10 (Fullscreen & Sound Fix)</div>
+            <div class="version-badge" style="margin-left: auto;">V113.11 (Fix Manual & Admin Booking)</div>
         </div>
     </div>
 
@@ -442,13 +441,11 @@
                 displayName = nick;
             }
             
-            // Fix for editing: use data attribute to avoid quote issues
             const valueToEdit = isNickSet ? nick : realName;
             let vipClass = "";
             if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
 
             if (isNickSet) {
-                // Updated onClick to use data-name attribute for safety
                 return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`;
             }
             return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
@@ -620,16 +617,21 @@ Input Message: "${text}"
 
         function processOrder(num, owner, uid, src, price, method = 'manual') {
             // Fix 1: Admin Duplicate Check
-            if (stockData[num]) {
+            if (stockData[num] && stockData[num].owner) {
                 const current = stockData[num];
-                // If owner is same name (even with diff UID like admin proxy), prevent overwrite/queue
                 if (current.owner === owner) return; 
-                // Also check queue for same name
                 if (current.queue?.find(q => q.owner === owner)) return;
             }
 
-            if (!stockData[num]) {
-                const data = { owner, uid, time: Date.now(), queue: [], source: method }; 
+            // Fix 2: Check if slot is truly vacant (no owner), regardless of price presence
+            const isVacant = !stockData[num] || !stockData[num].owner;
+
+            if (isVacant) {
+                const existingData = stockData[num] || {};
+                const data = { 
+                    ...existingData,
+                    owner, uid, time: Date.now(), queue: [], source: method 
+                }; 
                 if (price) data.price = price;
                 set(ref(db, `stock/${currentVideoId}/${num}`), data).then(()=> playDing());
             } else {
@@ -797,12 +799,10 @@ Input Message: "${text}"
             const current = snap.val();
             if (current && current.isAway) {
                 update(ref(db, 'system/awayMode'), { isAway: false });
-                // Sound handled by listener
             } else {
-                // Auto Enable AI Commander when Away Mode starts
                 update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() });
-                update(ref(db, 'system/aiCommander'), myDeviceId); // Enable AI Commander
-                // Sound handled by listener
+                // Auto AI on
+                update(ref(db, 'system/aiCommander'), myDeviceId);
             }
         };
 
@@ -1034,29 +1034,35 @@ Input Message: "${text}"
         window.handleStockClick = (num) => {
             const current = stockData[num];
             
-            // Case 1: Vacant Item (allow setting price)
+            // Case 1: Vacant Item (Combined Logic: Name OR Price)
             if (!current || !current.owner) {
                 const currentPrice = current && current.price ? current.price : '';
                 Swal.fire({
                     title: `เบอร์ ${num}`,
-                    text: 'ยังว่างอยู่ ใส่ราคาได้นะ',
-                    input: 'number',
+                    text: 'ใส่ชื่อเพื่อจอง หรือ ใส่ตัวเลขเพื่อตั้งราคา',
+                    input: 'text',
                     inputValue: currentPrice,
                     showCancelButton: true,
-                    confirmButtonText: 'บันทึกราคา',
+                    confirmButtonText: 'บันทึก',
                     cancelButtonText: 'ยกเลิก'
                 }).then((result) => {
                     if (result.isConfirmed) {
-                        // Keep owner null but set price
-                        const updates = {};
-                        if (!stockData[num]) {
-                            // Initialize with dummy data if doesn't exist to hold price
-                            // Use empty owner string to signify vacant
-                            updates[`stock/${currentVideoId}/${num}`] = { price: result.value, source: 'manual' }; 
+                        const val = result.value.trim();
+                        if (!val) return;
+
+                        if (/^\d+$/.test(val)) {
+                            // It's a price (Number)
+                            const updates = {};
+                            if (!stockData[num]) {
+                                updates[`stock/${currentVideoId}/${num}`] = { price: val, source: 'manual' }; 
+                            } else {
+                                updates[`stock/${currentVideoId}/${num}/price`] = val;
+                            }
+                            update(ref(db), updates);
                         } else {
-                            updates[`stock/${currentVideoId}/${num}/price`] = result.value;
+                            // It's a name (Booking)
+                            processOrder(num, val, 'manual-'+Date.now(), 'manual');
                         }
-                        update(ref(db), updates);
                     }
                 });
                 return;
