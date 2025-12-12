@@ -4,7 +4,7 @@
     <base target="_top">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Manowzab Command Center V113.22 (Scroll Lock & Fix)</title>
+    <title>Manowzab Command Center V113.24 (Auto Scroll Focus)</title>
     
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -177,6 +177,7 @@
         .shipping-table th, .shipping-table td { padding: 10px; border-bottom: 1px solid #333; text-align: left; }
         .address-box { width: 100%; background: #222; border: 1px solid #444; color: #fff; padding: 5px; min-height: 60px; font-family: 'Kanit'; }
         .edit-input { background: #222; border: 1px solid #444; color: #fff; padding: 4px; border-radius: 4px; width: 100%; }
+        .edit-input:focus { border-color: var(--success); outline: none; background: #333; }
         .history-search-box { width: 100%; background: #333; border: 1px solid #555; color: #fff; padding: 8px; border-radius: 4px; margin-bottom: 10px; font-family: 'Kanit'; }
         
         @media print { body * { visibility: hidden; } #print-area, #print-area * { visibility: visible; } #print-area { position: absolute; left: 0; top: 0; width: 100%; padding: 20px; background: white; color: black; } .print-label { border: 2px solid black; padding: 20px; margin-bottom: 20px; page-break-inside: avoid; } }
@@ -221,7 +222,7 @@
             <div class="status-dot" id="status-dot"></div>
             <div class="live-viewers" id="view-counter">👁️ 0</div>
             <div class="live-title" id="live-title">Offline Mode</div>
-            <div class="version-badge" style="margin-left: auto;">V113.22 (Scroll Lock & Fix)</div>
+            <div class="version-badge" style="margin-left: auto;">V113.24 (Auto Scroll Focus)</div>
         </div>
     </div>
 
@@ -283,6 +284,14 @@
         const app = initializeApp({ apiKey: "AIzaSyAVYqEmdw-AwS1tCElhSaXDLP1Aq35chp0", authDomain: "manowlive-chat.firebaseapp.com", databaseURL: "https://manowlive-chat-default-rtdb.asia-southeast1.firebasedatabase.app", projectId: "manowlive-chat" });
         const db = getDatabase(app);
         const auth = getAuth(app);
+
+        // --- SWAL OVERRIDE (FIX SCROLL JUMP) ---
+        // Override the global Swal with a configured Mixin
+        // This avoids recursion errors by extending the class instead of wrapping the function
+        window.Swal = Swal.mixin({
+            heightAuto: false, // Prevents body height modification
+            scrollbarPadding: false // Prevents layout shift
+        });
 
         // --- GLOBAL STATE ---
         const API_KEYS = ["AIzaSyAVzYQN51V-kITnyJWGy8IVSktitxrVD8g", "AIzaSyBlnw6tpETYu61XSNqd7zXt25Fv_vmbWJU", "AIzaSyAX3dwUqBFeCBjjZixVnlcBz56gAfNWzs0", "AIzaSyAxjRAs01mpt-NxQiR3yStr6Q-57EiQq64"];
@@ -428,7 +437,8 @@
                     const tr = document.createElement('tr');
                     const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
                     
-                    tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.askName('${uid}', this.value)"></td><td>${itemStr}</td>`;
+                    // Modified: Direct update on change, no popup
+                    tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`;
                     tbody.appendChild(tr);
                 }
                 
@@ -744,9 +754,39 @@ Input Message: "${text}"
         function connectToStock(vid) {
             if (unsubscribeStock) unsubscribeStock();
             currentVideoId = vid; lastScrollTimestamp = Date.now();
+            let isFirstLoad = true; 
+
             unsubscribeStock = onValue(ref(db, `stock/${vid}`), snap => {
-                stockData = snap.val() || {}; renderGrid(); updateStats(); updateShippingButton();
+                const val = snap.val() || {};
+                
+                // AUTO SCROLL LOGIC
+                if (!isFirstLoad) {
+                    const keys = Object.keys(val);
+                    for (const key of keys) {
+                        const newItem = val[key];
+                        const oldItem = stockData[key];
+                        
+                        // Check if newly occupied (has owner) AND (previously undefined OR previously no owner)
+                        if (newItem.owner && (!oldItem || !oldItem.owner)) {
+                            setTimeout(() => {
+                                const el = document.getElementById('stock-' + key);
+                                if (el) {
+                                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    el.classList.add('highlight'); // Visual Blink
+                                }
+                            }, 50);
+                            break; // Scroll to the first new item found
+                        }
+                    }
+                }
+
+                stockData = val; 
+                renderGrid(); 
+                updateStats(); 
+                updateShippingButton();
                 if(document.getElementById('dashboard').style.display === 'flex') renderDashboardTable();
+                
+                isFirstLoad = false;
             });
         }
 
@@ -811,6 +851,13 @@ Input Message: "${text}"
         window.renderDashboardTable = renderDashboardTable;
         window.updateAllChatNames = updateAllChatNames;
         window.askName = askName; 
+        
+        // NEW FUNCTION: Updates nickname without popup
+        window.updateNickSilent = (uid, val) => {
+            if(!val) return;
+            update(ref(db, `nicknames/${uid}`), {nick: val});
+        };
+
         window.saveStockSize = (val) => {
             set(ref(db, 'system/stockSize'), parseInt(val));
             document.getElementById('total-count').innerText = val;
@@ -951,7 +998,7 @@ Input Message: "${text}"
         window.handleStockClick = (num) => {
             const current = stockData[num];
             
-            // Case 1: Vacant Item (allow setting price)
+            // Case 1: Vacant Item (allow setting price or name)
             if (!current || !current.owner) {
                 const currentPrice = current && current.price ? current.price : '';
                 Swal.fire({
