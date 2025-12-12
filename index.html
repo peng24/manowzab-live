@@ -4,7 +4,7 @@
     <base target="_top">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Manowzab Command Center V113.15 (Fix Sync Crash)</title>
+    <title>Manowzab Command Center V113.16 (Super Sync Fix)</title>
     
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -221,7 +221,7 @@
             <div class="status-dot" id="status-dot"></div>
             <div class="live-viewers" id="view-counter">👁️ 0</div>
             <div class="live-title" id="live-title">Offline Mode</div>
-            <div class="version-badge" style="margin-left: auto;">V113.15 (Fix Sync Crash)</div>
+            <div class="version-badge" style="margin-left: auto;">V113.16 (Super Sync Fix)</div>
         </div>
     </div>
 
@@ -303,10 +303,11 @@
         let speechQueue = [], isSpeaking = false, isSoundOn = true;
         let activeUtterance = null;
 
-        // Away Mode Variables
+        // Away Mode Variables (Declared once)
         let isAway = false;
         let awayStartTime = 0;
         let awayInterval = null;
+        let currentAwayState = false; // Local tracking for sync
 
         // --- 1. UTILS & HELPERS ---
         function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
@@ -762,46 +763,40 @@ Input Message: "${text}"
             const banner = document.getElementById('awayBanner');
             const newState = val.isAway === true;
 
-            // Check if state actually changed to avoid loop
-            if (newState !== (banner.style.display === 'flex')) {
-                 if (newState) {
-                     queueSpeech("แอดมินพาลูกเข้านอนแล้ว");
-                     awayStartTime = val.startTime || Date.now();
-                     banner.style.display = 'flex';
-                     if (!awayInterval) {
-                          updateAwayTimer(); 
-                          awayInterval = setInterval(updateAwayTimer, 1000); 
-                     }
-                 } else {
-                     queueSpeech("ลูกหลับแล้ว แอดมินสแตนบาย");
-                     banner.style.display = 'none';
-                     if (awayInterval) {
-                         clearInterval(awayInterval);
-                         awayInterval = null;
-                     }
-                 }
+            // Update UI State from Firebase
+            if (newState !== currentAwayState) {
+                currentAwayState = newState;
+                if (currentAwayState) {
+                    banner.style.display = 'flex';
+                    awayStartTime = val.startTime || Date.now();
+                    queueSpeech("แอดมินพาลูกเข้านอนแล้ว"); // Sound triggered by state change
+                    if (!awayInterval) {
+                         updateAwayTimer(); 
+                         awayInterval = setInterval(updateAwayTimer, 1000); 
+                    }
+                } else {
+                    banner.style.display = 'none';
+                    queueSpeech("ลูกหลับแล้ว แอดมินสแตนบาย"); // Sound triggered by state change
+                    if (awayInterval) {
+                        clearInterval(awayInterval);
+                        awayInterval = null;
+                    }
+                }
             }
         });
 
         window.toggleAwayMode = async () => {
-            try {
-                const snap = await get(ref(db, 'system/awayMode'));
-                const current = snap.val() || {};
-                if (current.isAway) {
-                    await update(ref(db, 'system/awayMode'), { isAway: false });
-                } else {
-                    // Update Away Mode & Enable AI
-                    await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() });
-                    // Fix: Use set instead of update for simple string value
-                    await set(ref(db, 'system/aiCommander'), myDeviceId);
-                }
-            } catch(e) {
-                console.error("Away Mode Error", e);
+            // Read local state for faster toggle response, but rely on listener for UI update
+            if (currentAwayState) {
+                update(ref(db, 'system/awayMode'), { isAway: false });
+            } else {
+                update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() });
+                set(ref(db, 'system/aiCommander'), myDeviceId); // Auto AI
             }
         };
 
         function updateAwayTimer() {
-            if (!document.getElementById('awayBanner') || document.getElementById('awayBanner').style.display === 'none') return;
+            if (!currentAwayState) return;
             const diff = Math.floor((Date.now() - awayStartTime) / 1000);
             const minutes = Math.floor(diff / 60);
             const seconds = diff % 60;
@@ -937,6 +932,8 @@ Input Message: "${text}"
 
         window.askAiKey = () => { Swal.fire({ title: 'ตั้งค่า Gemini API Key', html: '<a href="https://aistudio.google.com/" target="_blank" style="color:#29b6f6">กดขอ Key ฟรีที่นี่</a>', input: 'text', inputValue: geminiApiKey, footer: geminiApiKey ? '<span style="color:lime">✅ มี Key อยู่ในเครื่องแล้ว</span>' : '' }).then(res => { if (res.value) { geminiApiKey = res.value.trim(); localStorage.setItem('geminiApiKey', geminiApiKey); Swal.fire('บันทึกแล้ว', '', 'success'); } }); };
         
+        window.testVoice = () => { queueSpeech("ทดสอบเสียง หนึ่ง สอง สาม สี่ ห้า"); };
+
         window.adjustZoom = (n) => { currentFontSize+=n; document.documentElement.style.setProperty('--chat-size', currentFontSize+'px'); };
         window.adjustGridZoom = (n) => { currentGridSize+=n; document.documentElement.style.setProperty('--grid-size', currentGridSize+'em'); };
 
@@ -949,7 +946,11 @@ Input Message: "${text}"
                     current.queue.forEach((q, idx) => {
                         queueHtml += `<li style="background:#fff; padding:8px; margin-bottom:4px; border-radius:4px; display:flex; justify-content:space-between; align-items:center; border:1px solid #ddd; font-size:0.95em;">
                             <span><strong style="color:#d32f2f;">${idx+1}.</strong> ${q.owner}</span>
-                            <button onclick="window.removeQueue(${num}, ${idx})" style="background:#ff5252; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.8em;">ลบ</button>
+                            <div>
+                                <button onclick="window.moveQueueUp(${num}, ${idx})" style="background:#2196f3; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.8em; margin-right:5px;">▲</button>
+                                <button onclick="window.editQueueName(${num}, ${idx})" style="background:#ff9800; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.8em; margin-right:5px;">✎</button>
+                                <button onclick="window.removeQueue(${num}, ${idx})" style="background:#ff5252; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.8em;">ลบ</button>
+                            </div>
                         </li>`;
                     });
                     queueHtml += '</ul></div>';
@@ -968,6 +969,37 @@ Input Message: "${text}"
                 const newQ = [...current.queue];
                 newQ.splice(idx, 1);
                 set(ref(db, `stock/${currentVideoId}/${num}/queue`), newQ).then(() => { Swal.close(); window.handleStockClick(num); });
+            }
+        };
+
+        window.moveQueueUp = (num, idx) => {
+            if (idx === 0) return; // Already at top
+            const current = stockData[num];
+            if (current && current.queue) {
+                const newQ = [...current.queue];
+                // Swap
+                const temp = newQ[idx];
+                newQ[idx] = newQ[idx-1];
+                newQ[idx-1] = temp;
+                set(ref(db, `stock/${currentVideoId}/${num}/queue`), newQ).then(() => { Swal.close(); window.handleStockClick(num); });
+            }
+        };
+
+        window.editQueueName = (num, idx) => {
+            const current = stockData[num];
+            if (current && current.queue) {
+                Swal.fire({
+                    title: 'แก้ไขชื่อในคิว',
+                    input: 'text',
+                    inputValue: current.queue[idx].owner,
+                    showCancelButton: true
+                }).then((result) => {
+                    if (result.value) {
+                         const updates = {};
+                         updates[`stock/${currentVideoId}/${num}/queue/${idx}/owner`] = result.value;
+                         update(ref(db), updates).then(() => { Swal.close(); window.handleStockClick(num); });
+                    }
+                });
             }
         };
 
