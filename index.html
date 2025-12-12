@@ -4,7 +4,7 @@
     <base target="_top">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Manowzab Command Center V113.17 (Audio Auto-Unlock)</title>
+    <title>Manowzab Command Center V113.19 (History Search & No-Jump)</title>
     
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -107,7 +107,7 @@
         }
         .blinking-border { animation: blinkBorder 1s infinite; animation-iteration-count: 15; }
 
-        /* AWAY BANNER - FIX Z-INDEX & VISIBILITY */
+        /* AWAY BANNER */
         .away-banner {
             position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
             background: linear-gradient(45deg, #6a1b9a, #8e24aa);
@@ -177,6 +177,7 @@
         .shipping-table th, .shipping-table td { padding: 10px; border-bottom: 1px solid #333; text-align: left; }
         .address-box { width: 100%; background: #222; border: 1px solid #444; color: #fff; padding: 5px; min-height: 60px; font-family: 'Kanit'; }
         .edit-input { background: #222; border: 1px solid #444; color: #fff; padding: 4px; border-radius: 4px; width: 100%; }
+        .history-search-box { width: 100%; background: #333; border: 1px solid #555; color: #fff; padding: 8px; border-radius: 4px; margin-bottom: 10px; font-family: 'Kanit'; }
         
         @media print { body * { visibility: hidden; } #print-area, #print-area * { visibility: visible; } #print-area { position: absolute; left: 0; top: 0; width: 100%; padding: 20px; background: white; color: black; } .print-label { border: 2px solid black; padding: 20px; margin-bottom: 20px; page-break-inside: avoid; } }
     </style>
@@ -220,7 +221,7 @@
             <div class="status-dot" id="status-dot"></div>
             <div class="live-viewers" id="view-counter">👁️ 0</div>
             <div class="live-title" id="live-title">Offline Mode</div>
-            <div class="version-badge" style="margin-left: auto;">V113.17 (Audio Auto-Unlock)</div>
+            <div class="version-badge" style="margin-left: auto;">V113.19 (History Search & No-Jump)</div>
         </div>
     </div>
 
@@ -267,7 +268,8 @@
         </div>
         <div id="history-modal" class="dashboard-overlay">
             <div class="dashboard-header"><div class="dash-title">🕒 ประวัติการไลฟ์</div><button class="btn btn-dark" onclick="window.closeHistory()">ปิด</button></div>
-            <div style="overflow-y:auto;"><ul id="history-list" class="history-list"></ul></div>
+            <div style="padding: 10px;"><input type="text" id="historySearchInput" class="history-search-box" placeholder="🔍 ค้นหาชื่อไลฟ์..." onkeyup="window.filterHistory()"></div>
+            <div style="overflow-y:auto; flex: 1;"><ul id="history-list" class="history-list"></ul></div>
         </div>
     </div>
     <div id="print-area"></div>
@@ -323,20 +325,13 @@
         // --- 2. AUDIO SYSTEM ---
         function unlockAudio() {
             if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
+                audioCtx.resume().then(() => {
+                    const u = new SpeechSynthesisUtterance(" ");
+                    synth.speak(u);
+                });
             }
-            // Aggressive TTS wake up for iOS
-            if (synth.paused) synth.resume();
-            if (synth.speaking) synth.cancel();
-            
-            // Play silent utterance to unlock audio
-            const u = new SpeechSynthesisUtterance(" ");
-            u.volume = 0;
-            synth.speak(u);
         }
-        // Unlock on first interaction
         document.addEventListener('click', () => { unlockAudio(); }, { once: true });
-        document.addEventListener('touchstart', () => { unlockAudio(); }, { once: true });
 
         function toggleSound() { 
             isSoundOn = !isSoundOn; 
@@ -410,6 +405,9 @@
         }
 
         function renderDashboardTable() {
+            const dashboard = document.querySelector('.dashboard-overlay');
+            const scrollY = dashboard.scrollTop; // Save Scroll Position
+
             const tbody = document.getElementById('shipping-body'); tbody.innerHTML = '';
             const userOrders = {};
             
@@ -431,6 +429,7 @@
                 tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.askName('${uid}', this.value)"></td><td>${itemStr}</td>`;
                 tbody.appendChild(tr);
             }
+            dashboard.scrollTop = scrollY; // Restore Scroll Position
         }
 
         function generateNameHtml(uid, realName) {
@@ -631,15 +630,8 @@ Input Message: "${text}"
                 if (current.queue?.find(q => q.owner === owner)) return;
             }
 
-            // Fix 2: Check if slot is truly vacant (no owner), regardless of price presence
-            const isVacant = !stockData[num] || !stockData[num].owner;
-
-            if (isVacant) {
-                const existingData = stockData[num] || {};
-                const data = { 
-                    ...existingData,
-                    owner, uid, time: Date.now(), queue: [], source: method 
-                }; 
+            if (!stockData[num]) {
+                const data = { owner, uid, time: Date.now(), queue: [], source: method }; 
                 if (price) data.price = price;
                 set(ref(db, `stock/${currentVideoId}/${num}`), data).then(()=> playDing());
             } else {
@@ -678,6 +670,9 @@ Input Message: "${text}"
         }
 
         function renderGrid() {
+            const panel = document.getElementById('stockPanel');
+            const scrollY = panel.scrollTop;
+
             const size = parseInt(document.getElementById('stockSize').value) || 70;
             const grid = document.getElementById('stockGrid');
             if (grid.children.length !== size) {
@@ -697,32 +692,19 @@ Input Message: "${text}"
             });
             for(let i=1; i<=size; i++) { if(!stockData[i]) { const el = document.getElementById('stock-'+i); if(el) { el.className='stock-item'; el.classList.remove('blinking-border'); document.getElementById(`status-${i}`).innerText='ว่าง'; document.getElementById(`price-${i}`).innerText=''; document.getElementById(`qbadge-${i}`).style.display='none'; el.querySelector('.lock-icon').style.display='none'; el.querySelector('.source-icon').style.display='none'; } } }
             if (latestId) { lastScrollTimestamp = maxTime; const target = document.getElementById('stock-'+latestId); if (target) { target.scrollIntoView({behavior:'smooth', block:'center'}); target.classList.add('highlight'); setTimeout(()=>target.classList.remove('highlight'), 1000); } }
+            
+            panel.scrollTop = scrollY; // Restore scroll position
         }
         
         function renderSlot(num, data) {
             const el = document.getElementById('stock-' + num); if(!el) return;
-            
-            // Handle Vacant item with Price (No Owner)
-            if (!data.owner) {
-                el.className = 'stock-item';
-                document.getElementById(`status-${num}`).innerText = 'ว่าง';
-                if (data.price) {
-                    const pEl = document.getElementById(`price-${num}`);
-                    pEl.innerText = '฿' + data.price;
-                    pEl.style.display = 'block';
-                    pEl.style.color = 'var(--vacant-price)'; // Gold color for vacant price
-                }
-                return;
-            }
-
             el.className = 'stock-item sold';
             if ((Date.now() - data.time) < 15000) { el.classList.add('blinking-border'); setTimeout(() => el.classList.remove('blinking-border'), 15000); } 
             else { el.classList.remove('blinking-border'); }
 
             document.getElementById(`status-${num}`).innerText = data.owner || 'Unknown';
             document.getElementById(`price-${num}`).innerText = data.price ? '฿'+data.price : '';
-            if (data.price) document.getElementById(`price-${num}`).style.color = '#ffd700'; // Normal sold price color
-
+            
             const lockIcon = el.querySelector('.lock-icon');
             const sourceIcon = el.querySelector('.source-icon'); 
             if(lockIcon) lockIcon.style.display = 'none'; 
@@ -843,8 +825,11 @@ Input Message: "${text}"
         window.printLabel = (uid) => {
              let total=0, items=[]; Object.keys(stockData).forEach(n=>{ if(stockData[n].uid===uid) { items.push(`#${n} ${stockData[n].price?stockData[n].price:''}`); total+=parseInt(stockData[n].price||0); } });
              let address = "";
-             if (shippingData[currentVideoId] && shippingData[currentVideoId][uid]) { address = shippingData[currentVideoId][uid].address || ""; } 
-             else if (savedNames[uid]) { address = savedNames[uid].address || ""; }
+             if (shippingData[currentVideoId] && shippingData[currentVideoId][uid]) {
+                 address = shippingData[currentVideoId][uid].address || "";
+             } else if (savedNames[uid]) {
+                 address = savedNames[uid].address || ""; // Fallback
+             }
              document.getElementById('print-area').innerHTML = `<div class="print-label"><div class="print-header">ผู้รับ: ${savedNames[uid]?.nick||'ลูกค้า'}</div><div class="print-address">${address}</div><div class="print-items">${items.join(', ')}<br>รวม: ${total} บาท</div></div>`; window.print();
         };
         
@@ -866,12 +851,12 @@ Input Message: "${text}"
         };
 
         function toggleConnection() {
-            unlockAudio(); // Unblock audio context immediately
             if (isConnected) {
                 clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false;
                 document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary";
                 document.getElementById('status-dot').className = "status-dot"; queueSpeech("หยุดการเชื่อมต่อ"); 
-                chatToken = ''; return;
+                chatToken = ''; 
+                return;
             }
             const vid = document.getElementById('vidInput').value.trim();
             if (!vid) return Swal.fire('Error', 'ใส่ Video ID ก่อน', 'error');
@@ -879,9 +864,15 @@ Input Message: "${text}"
             currentVideoId = vid; connectToStock(vid); set(ref(db, 'system/activeVideo'), vid); 
             chatToken = '';
             connectYoutube(vid).catch(e => { 
-                Swal.fire({ icon: 'info', title: 'เชื่อมต่อวิดีโอแล้ว', text: 'ไม่พบห้องแชทสด (อาจเป็นคลิปย้อนหลัง) ระบบจะทำงานในโหมดรับคำสั่งเสียง/กดเองเท่านั้น', timer: 3000 });
+                Swal.fire({
+                    icon: 'info',
+                    title: 'เชื่อมต่อวิดีโอแล้ว',
+                    text: 'ไม่พบห้องแชทสด (อาจเป็นคลิปย้อนหลัง) ระบบจะทำงานในโหมดรับคำสั่งเสียง/กดเองเท่านั้น',
+                    timer: 3000
+                });
                 isConnected = true; setLoading(false); isConnecting = false;
-                document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
+                document.getElementById('btnConnect').innerText = "DISCONNECT";
+                document.getElementById('btnConnect').className = "btn btn-dark";
                 document.getElementById('status-dot').className = "status-dot online";
             });
         }
@@ -896,12 +887,27 @@ Input Message: "${text}"
                 saveHistory(vid, item.snippet.title);
                 queueSpeech("เชื่อมต่อสำเร็จ กำลังอ่านคอมเมนต์จาก " + item.snippet.title);
                 isConnected = true; setLoading(false); isConnecting = false;
-                document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
+                document.getElementById('btnConnect').innerText = "DISCONNECT"; 
+                document.getElementById('btnConnect').className = "btn btn-dark";
                 document.getElementById('status-dot').className = "status-dot online";
+
                 if (item.liveStreamingDetails?.activeLiveChatId) {
-                    activeChatId = item.liveStreamingDetails.activeLiveChatId; chatToken = ''; loadChat(); updateViewerCount(vid); viewerIntervalId = setInterval(()=>updateViewerCount(vid), 15000);
-                } else { activeChatId = null; throw new Error("No Live Chat"); }
-            } catch(e) { console.error(e); isConnected = true; setLoading(false); isConnecting = false; document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark"; document.getElementById('status-dot').className = "status-dot online"; }
+                    activeChatId = item.liveStreamingDetails.activeLiveChatId;
+                    chatToken = ''; 
+                    loadChat(); 
+                    updateViewerCount(vid); 
+                    viewerIntervalId = setInterval(()=>updateViewerCount(vid), 15000);
+                } else {
+                    activeChatId = null;
+                    throw new Error("No Live Chat"); 
+                }
+            } catch(e) {
+                console.error(e);
+                isConnected = true; setLoading(false); isConnecting = false; // Fallback to offline
+                document.getElementById('btnConnect').innerText = "DISCONNECT"; 
+                document.getElementById('btnConnect').className = "btn btn-dark";
+                document.getElementById('status-dot').className = "status-dot online";
+            }
         }
 
         async function smartFetch(url) {
@@ -913,21 +919,34 @@ Input Message: "${text}"
         }
 
         async function loadChat() {
-            if (!isConnected || !activeChatId) return; if (isSimulating) return;
+            if (!isConnected || !activeChatId) return; 
+            if (isSimulating) return;
+
             const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
             try {
                 const data = await smartFetch(url);
-                if (data.items) { updateStatusIcon('stat-chat', 'ok'); data.items.forEach(item => processMessage(item)); chatToken = data.nextPageToken; }
-                const delay = data.pollingIntervalMillis || 5000; chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
-            } catch(e) { console.log("Chat Fetch Error", e); updateStatusIcon('stat-chat', 'err'); chatTimeoutId = setTimeout(loadChat, 10000); }
+                if (data.items) {
+                    updateStatusIcon('stat-chat', 'ok');
+                    data.items.forEach(item => processMessage(item));
+                    chatToken = data.nextPageToken;
+                }
+                const delay = data.pollingIntervalMillis || 5000;
+                chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
+            } catch(e) { 
+                console.log("Chat Fetch Error", e);
+                updateStatusIcon('stat-chat', 'err');
+                chatTimeoutId = setTimeout(loadChat, 10000); 
+            }
         }
 
         async function updateViewerCount(vid) {
             try {
                 const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${vid}`);
-                if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 180000); }
+                if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 300000); }
                 if (d.items?.[0]) document.getElementById('view-counter').innerText = "👁️ " + Number(d.items[0].liveStreamingDetails.concurrentViewers||0).toLocaleString();
-            } catch (e) { console.error("Viewer Count Error:", e); }
+            } catch (e) {
+                console.error("Viewer Count Error:", e);
+            }
         }
 
         function syncAiCommanderStatus() {
@@ -953,12 +972,30 @@ Input Message: "${text}"
             }
         });
 
-        window.askAiKey = () => { Swal.fire({ title: 'ตั้งค่า Gemini API Key', html: '<a href="https://aistudio.google.com/" target="_blank" style="color:#29b6f6">กดขอ Key ฟรีที่นี่</a>', input: 'text', inputValue: geminiApiKey, footer: geminiApiKey ? '<span style="color:lime">✅ มี Key อยู่ในเครื่องแล้ว</span>' : '' }).then(res => { if (res.value) { geminiApiKey = res.value.trim(); localStorage.setItem('geminiApiKey', geminiApiKey); Swal.fire('บันทึกแล้ว', '', 'success'); } }); };
+        window.askAiKey = () => {
+            Swal.fire({ title: 'ตั้งค่า Gemini API Key', html: '<a href="https://aistudio.google.com/" target="_blank" style="color:#29b6f6">กดขอ Key ฟรีที่นี่</a>', input: 'text', inputValue: geminiApiKey, footer: geminiApiKey ? '<span style="color:lime">✅ มี Key อยู่ในเครื่องแล้ว</span>' : '' }).then(res => { if (res.value) { geminiApiKey = res.value.trim(); localStorage.setItem('geminiApiKey', geminiApiKey); Swal.fire('บันทึกแล้ว', '', 'success'); } });
+        };
         
         window.testVoice = () => { queueSpeech("ทดสอบเสียง หนึ่ง สอง สาม สี่ ห้า"); };
 
         window.adjustZoom = (n) => { currentFontSize+=n; document.documentElement.style.setProperty('--chat-size', currentFontSize+'px'); };
         window.adjustGridZoom = (n) => { currentGridSize+=n; document.documentElement.style.setProperty('--grid-size', currentGridSize+'em'); };
+        
+        // --- HISTORY SEARCH ---
+        window.filterHistory = () => {
+            const input = document.getElementById('historySearchInput');
+            const filter = input.value.toUpperCase();
+            const ul = document.getElementById("history-list");
+            const li = ul.getElementsByTagName('li');
+            for (let i = 0; i < li.length; i++) {
+                const txtValue = li[i].textContent || li[i].innerText;
+                if (txtValue.toUpperCase().indexOf(filter) > -1) {
+                    li[i].style.display = "";
+                } else {
+                    li[i].style.display = "none";
+                }
+            }
+        };
 
         window.handleStockClick = (num) => {
             const current = stockData[num];
@@ -1124,11 +1161,17 @@ Input Message: "${text}"
         window.closeHistory = () => { document.getElementById('history-modal').style.display = 'none'; };
         async function loadHistoryList() {
             const list = document.getElementById('history-list'); list.innerHTML = 'Loading...';
+            // NEW: Fetch ALL history (to avoid index error) then sort/filter client-side
             const snapshot = await get(ref(db, 'history'));
-            list.innerHTML = ''; const items = []; 
+            list.innerHTML = ''; 
+            const items = []; 
             snapshot.forEach(c => items.push({ id: c.key, ...c.val() }));
-            items.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
-            items.forEach(i => {
+            items.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)); // Sort descending
+            
+            // Limit to last 100 for performance (optional)
+            const displayItems = items.slice(0, 100); 
+
+            displayItems.forEach(i => {
                 const li = document.createElement('li'); li.className = 'history-item';
                 li.innerHTML = `<div><span class="hist-date">${formatThaiDate(i.timestamp||0)}</span> ${i.title||i.id}</div> <button class="btn btn-dark" onclick="window.deleteHistory('${i.id}')">🗑️</button>`;
                 li.querySelector('div').onclick = () => { window.closeHistory(); document.getElementById('vidInput').value = i.id; window.toggleConnection(); };
