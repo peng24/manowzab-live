@@ -4,7 +4,7 @@
     <base target="_top">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Manowzab Command Center V113.11 (Fix Manual & Admin Booking)</title>
+    <title>Manowzab Command Center V113.15 (Fix Sync Crash)</title>
     
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -107,15 +107,16 @@
         }
         .blinking-border { animation: blinkBorder 1s infinite; animation-iteration-count: 15; }
 
-        /* AWAY BANNER */
+        /* AWAY BANNER - FIX Z-INDEX & VISIBILITY */
         .away-banner {
             position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
             background: linear-gradient(45deg, #6a1b9a, #8e24aa);
             color: white; padding: 10px 25px; border-radius: 30px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.6); z-index: 9999;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6); z-index: 9999; /* Maximum Priority */
             display: none; align-items: center; gap: 15px;
             font-size: 1.2em; border: 2px solid #ce93d8;
             animation: pulseAi 2s infinite; white-space: nowrap;
+            /* iPad tweak: move down slightly if needed */
             top: max(60px, calc(env(safe-area-inset-top) + 60px));
         }
         .away-timer { font-family: monospace; font-size: 1.3em; font-weight: bold; background: rgba(0,0,0,0.3); padding: 2px 8px; border-radius: 5px; }
@@ -220,7 +221,7 @@
             <div class="status-dot" id="status-dot"></div>
             <div class="live-viewers" id="view-counter">👁️ 0</div>
             <div class="live-title" id="live-title">Offline Mode</div>
-            <div class="version-badge" style="margin-left: auto;">V113.11 (Fix Manual & Admin Booking)</div>
+            <div class="version-badge" style="margin-left: auto;">V113.15 (Fix Sync Crash)</div>
         </div>
     </div>
 
@@ -302,7 +303,7 @@
         let speechQueue = [], isSpeaking = false, isSoundOn = true;
         let activeUtterance = null;
 
-        // Away Mode Variables (Declared once)
+        // Away Mode Variables
         let isAway = false;
         let awayStartTime = 0;
         let awayInterval = null;
@@ -356,7 +357,7 @@
             const thVoice = voices.find(v => v.lang.includes('th'));
             if (thVoice) u.voice = thVoice;
             u.onend = () => { isSpeaking = false; processQueue(); };
-            u.onerror = (e) => { console.error(e); isSpeaking = false; processQueue(); };
+            u.onerror = (e) => { console.error("TTS Error:", e.error); isSpeaking = false; processQueue(); };
             activeUtterance = u; 
             synth.speak(u);
         }
@@ -617,21 +618,14 @@ Input Message: "${text}"
 
         function processOrder(num, owner, uid, src, price, method = 'manual') {
             // Fix 1: Admin Duplicate Check
-            if (stockData[num] && stockData[num].owner) {
+            if (stockData[num]) {
                 const current = stockData[num];
                 if (current.owner === owner) return; 
                 if (current.queue?.find(q => q.owner === owner)) return;
             }
 
-            // Fix 2: Check if slot is truly vacant (no owner), regardless of price presence
-            const isVacant = !stockData[num] || !stockData[num].owner;
-
-            if (isVacant) {
-                const existingData = stockData[num] || {};
-                const data = { 
-                    ...existingData,
-                    owner, uid, time: Date.now(), queue: [], source: method 
-                }; 
+            if (!stockData[num]) {
+                const data = { owner, uid, time: Date.now(), queue: [], source: method }; 
                 if (price) data.price = price;
                 set(ref(db, `stock/${currentVideoId}/${num}`), data).then(()=> playDing());
             } else {
@@ -764,50 +758,50 @@ Input Message: "${text}"
 
         // --- NEW: AWAY MODE (GLOBAL SYNC FIX) ---
         onValue(ref(db, 'system/awayMode'), (snap) => {
-            const val = snap.val();
+            const val = snap.val() || {}; // Handle null
             const banner = document.getElementById('awayBanner');
-            const newState = val ? val.isAway : false;
+            const newState = val.isAway === true;
 
-            // Sound Trigger on State Change (Global)
-            if (newState !== isAway) {
+            // Check if state actually changed to avoid loop
+            if (newState !== (banner.style.display === 'flex')) {
                  if (newState) {
                      queueSpeech("แอดมินพาลูกเข้านอนแล้ว");
+                     awayStartTime = val.startTime || Date.now();
+                     banner.style.display = 'flex';
+                     if (!awayInterval) {
+                          updateAwayTimer(); 
+                          awayInterval = setInterval(updateAwayTimer, 1000); 
+                     }
                  } else {
                      queueSpeech("ลูกหลับแล้ว แอดมินสแตนบาย");
+                     banner.style.display = 'none';
+                     if (awayInterval) {
+                         clearInterval(awayInterval);
+                         awayInterval = null;
+                     }
                  }
-                 isAway = newState;
-            }
-
-            if (isAway) {
-                banner.style.display = 'flex';
-                awayStartTime = val.startTime;
-                if (!awayInterval) {
-                     updateAwayTimer(); 
-                     awayInterval = setInterval(updateAwayTimer, 1000); 
-                }
-            } else {
-                banner.style.display = 'none';
-                if (awayInterval) {
-                    clearInterval(awayInterval);
-                    awayInterval = null;
-                }
             }
         });
 
         window.toggleAwayMode = async () => {
-            const snap = await get(ref(db, 'system/awayMode'));
-            const current = snap.val();
-            if (current && current.isAway) {
-                update(ref(db, 'system/awayMode'), { isAway: false });
-            } else {
-                update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() });
-                // Auto AI on
-                update(ref(db, 'system/aiCommander'), myDeviceId);
+            try {
+                const snap = await get(ref(db, 'system/awayMode'));
+                const current = snap.val() || {};
+                if (current.isAway) {
+                    await update(ref(db, 'system/awayMode'), { isAway: false });
+                } else {
+                    // Update Away Mode & Enable AI
+                    await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() });
+                    // Fix: Use set instead of update for simple string value
+                    await set(ref(db, 'system/aiCommander'), myDeviceId);
+                }
+            } catch(e) {
+                console.error("Away Mode Error", e);
             }
         };
 
         function updateAwayTimer() {
-            if (!isAway) return;
+            if (!document.getElementById('awayBanner') || document.getElementById('awayBanner').style.display === 'none') return;
             const diff = Math.floor((Date.now() - awayStartTime) / 1000);
             const minutes = Math.floor(diff / 60);
             const seconds = diff % 60;
@@ -833,11 +827,8 @@ Input Message: "${text}"
         window.printLabel = (uid) => {
              let total=0, items=[]; Object.keys(stockData).forEach(n=>{ if(stockData[n].uid===uid) { items.push(`#${n} ${stockData[n].price?stockData[n].price:''}`); total+=parseInt(stockData[n].price||0); } });
              let address = "";
-             if (shippingData[currentVideoId] && shippingData[currentVideoId][uid]) {
-                 address = shippingData[currentVideoId][uid].address || "";
-             } else if (savedNames[uid]) {
-                 address = savedNames[uid].address || ""; // Fallback
-             }
+             if (shippingData[currentVideoId] && shippingData[currentVideoId][uid]) { address = shippingData[currentVideoId][uid].address || ""; } 
+             else if (savedNames[uid]) { address = savedNames[uid].address || ""; }
              document.getElementById('print-area').innerHTML = `<div class="print-label"><div class="print-header">ผู้รับ: ${savedNames[uid]?.nick||'ลูกค้า'}</div><div class="print-address">${address}</div><div class="print-items">${items.join(', ')}<br>รวม: ${total} บาท</div></div>`; window.print();
         };
         
@@ -863,8 +854,7 @@ Input Message: "${text}"
                 clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false;
                 document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary";
                 document.getElementById('status-dot').className = "status-dot"; queueSpeech("หยุดการเชื่อมต่อ"); 
-                chatToken = ''; 
-                return;
+                chatToken = ''; return;
             }
             const vid = document.getElementById('vidInput').value.trim();
             if (!vid) return Swal.fire('Error', 'ใส่ Video ID ก่อน', 'error');
@@ -872,15 +862,9 @@ Input Message: "${text}"
             currentVideoId = vid; connectToStock(vid); set(ref(db, 'system/activeVideo'), vid); 
             chatToken = '';
             connectYoutube(vid).catch(e => { 
-                Swal.fire({
-                    icon: 'info',
-                    title: 'เชื่อมต่อวิดีโอแล้ว',
-                    text: 'ไม่พบห้องแชทสด (อาจเป็นคลิปย้อนหลัง) ระบบจะทำงานในโหมดรับคำสั่งเสียง/กดเองเท่านั้น',
-                    timer: 3000
-                });
+                Swal.fire({ icon: 'info', title: 'เชื่อมต่อวิดีโอแล้ว', text: 'ไม่พบห้องแชทสด (อาจเป็นคลิปย้อนหลัง) ระบบจะทำงานในโหมดรับคำสั่งเสียง/กดเองเท่านั้น', timer: 3000 });
                 isConnected = true; setLoading(false); isConnecting = false;
-                document.getElementById('btnConnect').innerText = "DISCONNECT";
-                document.getElementById('btnConnect').className = "btn btn-dark";
+                document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
                 document.getElementById('status-dot').className = "status-dot online";
             });
         }
@@ -890,33 +874,16 @@ Input Message: "${text}"
             try {
                 const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${vid}`);
                 if (!d.items || d.items.length === 0) throw new Error("ID ไม่ถูกต้อง");
-
                 const item = d.items[0];
                 document.getElementById('live-title').innerText = item.snippet.title;
                 saveHistory(vid, item.snippet.title);
-                queueSpeech("เชื่อมต่อสำเร็จ กำลังอ่านคอมเมนต์จาก " + item.snippet.title);
                 isConnected = true; setLoading(false); isConnecting = false;
-                document.getElementById('btnConnect').innerText = "DISCONNECT"; 
-                document.getElementById('btnConnect').className = "btn btn-dark";
+                document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
                 document.getElementById('status-dot').className = "status-dot online";
-
                 if (item.liveStreamingDetails?.activeLiveChatId) {
-                    activeChatId = item.liveStreamingDetails.activeLiveChatId;
-                    chatToken = ''; 
-                    loadChat(); 
-                    updateViewerCount(vid); 
-                    viewerIntervalId = setInterval(()=>updateViewerCount(vid), 15000);
-                } else {
-                    activeChatId = null;
-                    throw new Error("No Live Chat"); 
-                }
-            } catch(e) {
-                console.error(e);
-                isConnected = true; setLoading(false); isConnecting = false; // Fallback to offline
-                document.getElementById('btnConnect').innerText = "DISCONNECT"; 
-                document.getElementById('btnConnect').className = "btn btn-dark";
-                document.getElementById('status-dot').className = "status-dot online";
-            }
+                    activeChatId = item.liveStreamingDetails.activeLiveChatId; chatToken = ''; loadChat(); updateViewerCount(vid); viewerIntervalId = setInterval(()=>updateViewerCount(vid), 15000);
+                } else { activeChatId = null; throw new Error("No Live Chat"); }
+            } catch(e) { console.error(e); isConnected = true; setLoading(false); isConnecting = false; document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark"; document.getElementById('status-dot').className = "status-dot online"; }
         }
 
         async function smartFetch(url) {
@@ -928,34 +895,21 @@ Input Message: "${text}"
         }
 
         async function loadChat() {
-            if (!isConnected || !activeChatId) return; 
-            if (isSimulating) return;
-
+            if (!isConnected || !activeChatId) return; if (isSimulating) return;
             const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
             try {
                 const data = await smartFetch(url);
-                if (data.items) {
-                    updateStatusIcon('stat-chat', 'ok');
-                    data.items.forEach(item => processMessage(item));
-                    chatToken = data.nextPageToken;
-                }
-                const delay = data.pollingIntervalMillis || 5000;
-                chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
-            } catch(e) { 
-                console.log("Chat Fetch Error", e);
-                updateStatusIcon('stat-chat', 'err');
-                chatTimeoutId = setTimeout(loadChat, 10000); 
-            }
+                if (data.items) { updateStatusIcon('stat-chat', 'ok'); data.items.forEach(item => processMessage(item)); chatToken = data.nextPageToken; }
+                const delay = data.pollingIntervalMillis || 5000; chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
+            } catch(e) { console.log("Chat Fetch Error", e); updateStatusIcon('stat-chat', 'err'); chatTimeoutId = setTimeout(loadChat, 10000); }
         }
 
         async function updateViewerCount(vid) {
             try {
                 const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${vid}`);
-                if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 300000); }
+                if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 180000); }
                 if (d.items?.[0]) document.getElementById('view-counter').innerText = "👁️ " + Number(d.items[0].liveStreamingDetails.concurrentViewers||0).toLocaleString();
-            } catch (e) {
-                console.error("Viewer Count Error:", e);
-            }
+            } catch (e) { console.error("Viewer Count Error:", e); }
         }
 
         function syncAiCommanderStatus() {
@@ -981,107 +935,21 @@ Input Message: "${text}"
             }
         });
 
-        window.askAiKey = () => {
-            Swal.fire({ title: 'ตั้งค่า Gemini API Key', html: '<a href="https://aistudio.google.com/" target="_blank" style="color:#29b6f6">กดขอ Key ฟรีที่นี่</a>', input: 'text', inputValue: geminiApiKey, footer: geminiApiKey ? '<span style="color:lime">✅ มี Key อยู่ในเครื่องแล้ว</span>' : '' }).then(res => { if (res.value) { geminiApiKey = res.value.trim(); localStorage.setItem('geminiApiKey', geminiApiKey); Swal.fire('บันทึกแล้ว', '', 'success'); } });
-        };
+        window.askAiKey = () => { Swal.fire({ title: 'ตั้งค่า Gemini API Key', html: '<a href="https://aistudio.google.com/" target="_blank" style="color:#29b6f6">กดขอ Key ฟรีที่นี่</a>', input: 'text', inputValue: geminiApiKey, footer: geminiApiKey ? '<span style="color:lime">✅ มี Key อยู่ในเครื่องแล้ว</span>' : '' }).then(res => { if (res.value) { geminiApiKey = res.value.trim(); localStorage.setItem('geminiApiKey', geminiApiKey); Swal.fire('บันทึกแล้ว', '', 'success'); } }); };
         
-        window.toggleVoiceControl = toggleVoiceControl;
-        function toggleVoiceControl() {
-            if (!('webkitSpeechRecognition' in window)) return Swal.fire('ไม่รองรับ', 'ใช้ Chrome บน PC ดีสุด', 'error');
-            if (!geminiApiKey) return Swal.fire({icon:'info', title:'ต้องใส่ API Key ก่อน'});
-            isVoiceActive = !isVoiceActive;
-            const btn = document.getElementById('btnVoice');
-            const ind = document.getElementById('mic-indicator');
-            if (isVoiceActive) { btn.classList.add('active'); btn.innerText = '🛑'; ind.style.display = 'block'; startListening(); } 
-            else { btn.classList.remove('active'); btn.innerText = '🎙️'; ind.style.display = 'none'; if(recognition) recognition.stop(); }
-        }
-
-        function startListening() {
-            try {
-                recognition = new webkitSpeechRecognition();
-                recognition.continuous = true; recognition.interimResults = false; recognition.lang = 'th-TH';
-                recognition.onresult = async (event) => {
-                    const transcript = event.results[event.results.length - 1][0].transcript;
-                    const data = await analyzeChatWithAI(transcript);
-                    if (data && data.id && data.intent === 'buy') {
-                         processOrder(data.id, 'Voice Command', 'voice-cmd', 'voice', data.price, 'ai');
-                         Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `อัปเดตเบอร์ ${data.id}`, text: `จากเสียง`, timer: 2000, showConfirmButton: false, background: '#333', color: '#fff' });
-                    }
-                };
-                recognition.onerror = (e) => { 
-                    if(isVoiceActive) {
-                        try { recognition.start(); } catch(err) { console.warn("Mic restart error", err); }
-                    }
-                };
-                recognition.onend = () => { 
-                    if (isVoiceActive) {
-                        try { recognition.start(); } catch(err) { console.warn("Mic restart error", err); }
-                    }
-                };
-                recognition.start();
-            } catch(e) {
-                console.error("Mic start error", e);
-                isVoiceActive = false;
-                const btn = document.getElementById('btnVoice');
-                btn.classList.remove('active'); btn.innerText = '🎙️';
-            }
-        }
-        
-        // --- MORE UI EXPORTS ---
         window.adjustZoom = (n) => { currentFontSize+=n; document.documentElement.style.setProperty('--chat-size', currentFontSize+'px'); };
         window.adjustGridZoom = (n) => { currentGridSize+=n; document.documentElement.style.setProperty('--grid-size', currentGridSize+'em'); };
 
         window.handleStockClick = (num) => {
             const current = stockData[num];
-            
-            // Case 1: Vacant Item (Combined Logic: Name OR Price)
-            if (!current || !current.owner) {
-                const currentPrice = current && current.price ? current.price : '';
-                Swal.fire({
-                    title: `เบอร์ ${num}`,
-                    text: 'ใส่ชื่อเพื่อจอง หรือ ใส่ตัวเลขเพื่อตั้งราคา',
-                    input: 'text',
-                    inputValue: currentPrice,
-                    showCancelButton: true,
-                    confirmButtonText: 'บันทึก',
-                    cancelButtonText: 'ยกเลิก'
-                }).then((result) => {
-                    if (result.isConfirmed) {
-                        const val = result.value.trim();
-                        if (!val) return;
-
-                        if (/^\d+$/.test(val)) {
-                            // It's a price (Number)
-                            const updates = {};
-                            if (!stockData[num]) {
-                                updates[`stock/${currentVideoId}/${num}`] = { price: val, source: 'manual' }; 
-                            } else {
-                                updates[`stock/${currentVideoId}/${num}/price`] = val;
-                            }
-                            update(ref(db), updates);
-                        } else {
-                            // It's a name (Booking)
-                            processOrder(num, val, 'manual-'+Date.now(), 'manual');
-                        }
-                    }
-                });
-                return;
-            }
-
-            // Case 2: Sold Item (Queue Management)
             if (current) { 
                 let queueHtml = '';
                 if (current.queue && current.queue.length > 0) {
                     queueHtml = '<div style="margin-top:10px; text-align:left; background:#eee; color:#000; padding:10px; border-radius:6px; border:1px solid #ccc;"><strong>คิวต่อ:</strong><ul style="padding-left:0; margin:10px 0; list-style:none;">';
                     current.queue.forEach((q, idx) => {
-                        // Add Up/Move button logic if needed, simple delete for now
                         queueHtml += `<li style="background:#fff; padding:8px; margin-bottom:4px; border-radius:4px; display:flex; justify-content:space-between; align-items:center; border:1px solid #ddd; font-size:0.95em;">
                             <span><strong style="color:#d32f2f;">${idx+1}.</strong> ${q.owner}</span>
-                            <div>
-                                <button onclick="window.moveQueueUp(${num}, ${idx})" style="background:#2196f3; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.8em; margin-right:5px;">▲</button>
-                                <button onclick="window.editQueueName(${num}, ${idx})" style="background:#ff9800; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.8em; margin-right:5px;">✎</button>
-                                <button onclick="window.removeQueue(${num}, ${idx})" style="background:#ff5252; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.8em;">ลบ</button>
-                            </div>
+                            <button onclick="window.removeQueue(${num}, ${idx})" style="background:#ff5252; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.8em;">ลบ</button>
                         </li>`;
                     });
                     queueHtml += '</ul></div>';
@@ -1091,7 +959,7 @@ Input Message: "${text}"
                     html: `<div style="font-size:1.2em; color:#00e676; margin-bottom:10px;">${current.owner}</div><div style="display:flex; gap:5px; justify-content:center; flex-wrap:wrap;"><button onclick="window.doAction(${num}, 'edit')" class="swal2-confirm swal2-styled" style="background:#1976d2; margin:0;">แก้ชื่อ</button> <button onclick="window.doAction(${num}, 'price')" class="swal2-confirm swal2-styled" style="background:#555; margin:0;">แก้ราคา</button> <button onclick="window.doAction(${num}, 'cancel')" class="swal2-confirm swal2-styled" style="background:#d32f2f; margin:0;">ยกเลิกจอง</button></div>${queueHtml}`, 
                     showConfirmButton: false 
                 }); 
-            }
+            } else { Swal.fire({title: `จองเบอร์ ${num}`, input: 'text', placeholder: 'ใส่ชื่อลูกค้า'}).then(r => { if (r.isConfirmed) processOrder(num, r.value || 'ลูกค้า (Manual)', 'manual-'+Date.now(), 'manual'); }); }
         };
         
         window.removeQueue = (num, idx) => {
@@ -1100,37 +968,6 @@ Input Message: "${text}"
                 const newQ = [...current.queue];
                 newQ.splice(idx, 1);
                 set(ref(db, `stock/${currentVideoId}/${num}/queue`), newQ).then(() => { Swal.close(); window.handleStockClick(num); });
-            }
-        };
-
-        window.moveQueueUp = (num, idx) => {
-            if (idx === 0) return; // Already at top
-            const current = stockData[num];
-            if (current && current.queue) {
-                const newQ = [...current.queue];
-                // Swap
-                const temp = newQ[idx];
-                newQ[idx] = newQ[idx-1];
-                newQ[idx-1] = temp;
-                set(ref(db, `stock/${currentVideoId}/${num}/queue`), newQ).then(() => { Swal.close(); window.handleStockClick(num); });
-            }
-        };
-
-        window.editQueueName = (num, idx) => {
-            const current = stockData[num];
-            if (current && current.queue) {
-                Swal.fire({
-                    title: 'แก้ไขชื่อในคิว',
-                    input: 'text',
-                    inputValue: current.queue[idx].owner,
-                    showCancelButton: true
-                }).then((result) => {
-                    if (result.value) {
-                         const updates = {};
-                         updates[`stock/${currentVideoId}/${num}/queue/${idx}/owner`] = result.value;
-                         update(ref(db), updates).then(() => { Swal.close(); window.handleStockClick(num); });
-                    }
-                });
             }
         };
 
@@ -1216,11 +1053,6 @@ Input Message: "${text}"
         window.openDashboard = () => { document.getElementById('dashboard').style.display = 'flex'; renderDashboardTable(); };
         window.closeDashboard = () => { document.getElementById('dashboard').style.display = 'none'; };
         window.toggleShowAll = () => { showAllShipping = !showAllShipping; renderDashboardTable(); };
-        window.saveAddress = (uid, val) => update(ref(db, 'nicknames/'+uid), {address: val});
-        window.printLabel = (uid) => {
-             let total=0, items=[]; Object.keys(stockData).forEach(n=>{ if(stockData[n].uid===uid) { items.push(`#${n} ${stockData[n].price?stockData[n].price:''}`); total+=parseInt(stockData[n].price||0); } });
-             document.getElementById('print-area').innerHTML = `<div class="print-label"><div class="print-header">ผู้รับ: ${savedNames[uid]?.nick||'ลูกค้า'}</div><div class="print-address">${savedNames[uid]?.address||''}</div><div class="print-items">${items.join(', ')}<br>รวม: ${total} บาท</div></div>`; window.print();
-        };
 
         // INIT
         signInAnonymously(auth);
