@@ -4,7 +4,7 @@
     <base target="_top">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Manowzab Command Center V113.24 (Auto Scroll Focus)</title>
+    <title>Manowzab Command Center V113.26 (Golden Highlight)</title>
     
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -98,14 +98,16 @@
         @keyframes pulseAi { 0% { box-shadow: 0 0 5px rgba(156, 39, 176, 0.5); } 50% { box-shadow: 0 0 15px rgba(156, 39, 176, 0.8); } 100% { box-shadow: 0 0 5px rgba(156, 39, 176, 0.5); } }
         @keyframes pulseRed { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
         @keyframes pulseMic { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-        @keyframes highlightBox { 0% { transform: scale(1.1); box-shadow: 0 0 20px #ffeb3b; } 100% { transform: scale(1); } }
         
-        @keyframes blinkBorder { 
-            0% { border-color: var(--success); box-shadow: 0 0 5px var(--success); } 
-            50% { border-color: transparent; box-shadow: none; } 
-            100% { border-color: var(--success); box-shadow: 0 0 5px var(--success); } 
+        /* Auto Scroll Highlight (Yellow Pop) */
+        @keyframes highlightBox { 0% { transform: scale(1.1); box-shadow: 0 0 20px #ffeb3b; } 100% { transform: scale(1); } }
+        .stock-item.highlight { animation: highlightBox 1s ease-out; z-index: 5; border-color: #ffeb3b; }
+
+        /* New Order 15s Blink (Gold/Red Pulse) */
+        @keyframes newOrderBlink {
+            0%, 100% { border-color: #FFD700; box-shadow: 0 0 15px #FFD700; background-color: rgba(255, 215, 0, 0.3); }
+            50% { border-color: var(--primary); box-shadow: none; background-color: rgba(211, 47, 47, 0.15); }
         }
-        .blinking-border { animation: blinkBorder 1s infinite; animation-iteration-count: 15; }
 
         /* AWAY BANNER */
         .away-banner {
@@ -131,7 +133,6 @@
         .stock-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 8px; padding-bottom: 50px; }
         .stock-item { aspect-ratio: 1/0.8; background: var(--grid-empty); border-radius: 8px; display: flex; flex-direction: column; justify-content: center; align-items: center; cursor: pointer; position: relative; transition: 0.2s; user-select: none; border: 1px solid #333; }
         .stock-item:hover { border-color: #666; transform: translateY(-2px); }
-        .stock-item.highlight { animation: highlightBox 1s ease-out; z-index: 5; border-color: #ffeb3b; }
         
         .stock-num { font-size: 1.8em; font-weight: bold; color: #444; position: absolute; top: 2px; left: 8px; }
         .stock-status { font-size: 0.9em; margin-top: 20px; text-align: center; color: #888; font-weight: normal; padding: 0 4px; word-break: break-word; line-height: 1.2; }
@@ -142,6 +143,12 @@
         .stock-item.sold .stock-num { color: rgba(255,255,255,0.5); }
         .stock-item.sold .stock-status { color: #fff; font-weight: bold; text-shadow: 0 0 5px rgba(0,0,0,0.5); }
         .stock-item.sold .stock-price { display: block; }
+        
+        /* New Order Highlight Class */
+        .stock-item.sold.new-order { 
+            animation: newOrderBlink 1s infinite; 
+            z-index: 2;
+        }
         
         /* Source Icon */
         .stock-item.sold .source-icon { display: block; }
@@ -222,7 +229,7 @@
             <div class="status-dot" id="status-dot"></div>
             <div class="live-viewers" id="view-counter">👁️ 0</div>
             <div class="live-title" id="live-title">Offline Mode</div>
-            <div class="version-badge" style="margin-left: auto;">V113.24 (Auto Scroll Focus)</div>
+            <div class="version-badge" style="margin-left: auto;">V113.26 (Golden Highlight)</div>
         </div>
     </div>
 
@@ -278,19 +285,17 @@
     <!-- Logic -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
-        import { getDatabase, ref, set, update, remove, onValue, get, serverTimestamp, query, orderByChild } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
+        import { getDatabase, ref, set, update, remove, onValue, get, serverTimestamp, query, orderByChild, runTransaction } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
 
         const app = initializeApp({ apiKey: "AIzaSyAVYqEmdw-AwS1tCElhSaXDLP1Aq35chp0", authDomain: "manowlive-chat.firebaseapp.com", databaseURL: "https://manowlive-chat-default-rtdb.asia-southeast1.firebasedatabase.app", projectId: "manowlive-chat" });
         const db = getDatabase(app);
         const auth = getAuth(app);
 
-        // --- SWAL OVERRIDE (FIX SCROLL JUMP) ---
-        // Override the global Swal with a configured Mixin
-        // This avoids recursion errors by extending the class instead of wrapping the function
+        // --- SWAL OVERRIDE ---
         window.Swal = Swal.mixin({
-            heightAuto: false, // Prevents body height modification
-            scrollbarPadding: false // Prevents layout shift
+            heightAuto: false, 
+            scrollbarPadding: false 
         });
 
         // --- GLOBAL STATE ---
@@ -437,7 +442,6 @@
                     const tr = document.createElement('tr');
                     const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
                     
-                    // Modified: Direct update on change, no popup
                     tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`;
                     tbody.appendChild(tr);
                 }
@@ -618,7 +622,7 @@ Input Message: "${text}"
                         if (cleanName.length > 0) { ownerName = cleanName; ownerUid = 'admin-proxy-' + Date.now(); } 
                         else { ownerName = "ลูกค้า (Admin)"; ownerUid = 'admin-proxy-' + Date.now(); }
                     }
-                    processOrder(targetId, ownerName, ownerUid, 'chat', targetPrice, method); 
+                    await processOrder(targetId, ownerName, ownerUid, 'chat', targetPrice, method); 
                 } else if (intent === 'cancel') {
                     if (isAdmin || (stockData[targetId] && stockData[targetId].uid === uid)) {
                         processCancel(targetId, isAdmin ? 'แอดมินยกเลิก' : 'ว่างแล้วค่ะ');
@@ -627,23 +631,40 @@ Input Message: "${text}"
             }
         }
 
-        function processOrder(num, owner, uid, src, price, method = 'manual') {
-            const current = stockData[num];
-            // Fix 1: Check if occupied (must have owner)
-            const isOccupied = current && current.owner;
-
-            if (!isOccupied) {
-                const existingData = stockData[num] || {};
-                const data = { ...existingData, owner, uid, time: Date.now(), queue: [], source: method }; 
-                if (price) data.price = price;
-                set(ref(db, `stock/${currentVideoId}/${num}`), data).then(()=> playDing());
-            } else {
-                if (current.owner === owner) return; 
-                if (current.queue?.find(q => q.owner === owner)) return;
+        async function processOrder(num, owner, uid, src, price, method = 'manual') {
+            const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
+            
+            try {
+                await runTransaction(itemRef, (currentData) => {
+                    if (currentData === null) {
+                        // Slot is empty, claim it
+                        return { owner, uid, time: Date.now(), queue: [], source: method, price: price || null };
+                    } else if (!currentData.owner) {
+                        // Slot exists but has no owner (e.g. only price was set)
+                        currentData.owner = owner;
+                        currentData.uid = uid;
+                        currentData.time = Date.now();
+                        currentData.source = method;
+                        if(price) currentData.price = price;
+                        if(!currentData.queue) currentData.queue = [];
+                        return currentData;
+                    } else {
+                        // Slot occupied
+                        if (currentData.owner === owner) return; 
+                        const queue = currentData.queue || [];
+                        if (queue.find(q => q.owner === owner)) return; 
+                        
+                        queue.push({ owner, uid, time: Date.now() });
+                        currentData.queue = queue;
+                        return currentData;
+                    }
+                });
                 
-                const newQ = current.queue || [];
-                newQ.push({ owner, uid, time: Date.now() });
-                set(ref(db, `stock/${currentVideoId}/${num}/queue`), newQ);
+                const current = stockData[num];
+                if (current && current.owner === owner) playDing();
+
+            } catch (e) {
+                console.error("Transaction failed: ", e);
             }
         }
 
@@ -680,7 +701,7 @@ Input Message: "${text}"
             Object.keys(stockData).forEach(key => {
                 const item = stockData[key]; renderSlot(key, item);
             });
-            for(let i=1; i<=size; i++) { if(!stockData[i]) { const el = document.getElementById('stock-'+i); if(el) { el.className='stock-item'; el.classList.remove('blinking-border'); document.getElementById(`status-${i}`).innerText='ว่าง'; document.getElementById(`price-${i}`).innerText=''; document.getElementById(`qbadge-${i}`).style.display='none'; el.querySelector('.lock-icon').style.display='none'; el.querySelector('.source-icon').style.display='none'; } } }
+            for(let i=1; i<=size; i++) { if(!stockData[i]) { const el = document.getElementById('stock-'+i); if(el) { el.className='stock-item'; el.classList.remove('new-order'); document.getElementById(`status-${i}`).innerText='ว่าง'; document.getElementById(`price-${i}`).innerText=''; document.getElementById(`qbadge-${i}`).style.display='none'; el.querySelector('.lock-icon').style.display='none'; el.querySelector('.source-icon').style.display='none'; } } }
             
             // Fix 2: Restore scroll position
             if(panel) {
@@ -706,8 +727,16 @@ Input Message: "${text}"
             }
 
             el.className = 'stock-item sold';
-            if ((Date.now() - data.time) < 15000) { el.classList.add('blinking-border'); setTimeout(() => el.classList.remove('blinking-border'), 15000); } 
-            else { el.classList.remove('blinking-border'); }
+            // NEW ORDER HIGHLIGHT LOGIC
+            const isNewOrder = (Date.now() - data.time) < 15000;
+            if (isNewOrder) {
+                el.classList.add('new-order');
+                // Auto remove after time expires (improves performance by not relying solely on render loop)
+                const remaining = 15000 - (Date.now() - data.time);
+                setTimeout(() => el.classList.remove('new-order'), remaining);
+            } else {
+                el.classList.remove('new-order');
+            }
 
             document.getElementById(`status-${num}`).innerText = data.owner || 'Unknown';
             document.getElementById(`price-${num}`).innerText = data.price ? '฿'+data.price : '';
@@ -940,7 +969,13 @@ Input Message: "${text}"
             const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
             try {
                 const data = await smartFetch(url);
-                if (data.items) { updateStatusIcon('stat-chat', 'ok'); data.items.forEach(item => processMessage(item)); chatToken = data.nextPageToken; }
+                if (data.items) { 
+                    updateStatusIcon('stat-chat', 'ok'); 
+                    for (const item of data.items) {
+                        await processMessage(item);
+                    }
+                    chatToken = data.nextPageToken; 
+                }
                 const delay = data.pollingIntervalMillis || 5000; chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
             } catch(e) { console.log("Chat Fetch Error", e); updateStatusIcon('stat-chat', 'err'); chatTimeoutId = setTimeout(loadChat, 10000); }
         }
