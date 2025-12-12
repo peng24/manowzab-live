@@ -4,7 +4,7 @@
     <base target="_top">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Manowzab Command Center V113.19 (History Search & No-Jump)</title>
+    <title>Manowzab Command Center V113.20 (Scroll Fix - No Jumping)</title>
     
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -107,7 +107,7 @@
         }
         .blinking-border { animation: blinkBorder 1s infinite; animation-iteration-count: 15; }
 
-        /* AWAY BANNER */
+        /* AWAY BANNER - FIX Z-INDEX & VISIBILITY */
         .away-banner {
             position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
             background: linear-gradient(45deg, #6a1b9a, #8e24aa);
@@ -221,7 +221,7 @@
             <div class="status-dot" id="status-dot"></div>
             <div class="live-viewers" id="view-counter">👁️ 0</div>
             <div class="live-title" id="live-title">Offline Mode</div>
-            <div class="version-badge" style="margin-left: auto;">V113.19 (History Search & No-Jump)</div>
+            <div class="version-badge" style="margin-left: auto;">V113.20 (Scroll Fix - No Jumping)</div>
         </div>
     </div>
 
@@ -297,7 +297,7 @@
         let activeChatId = '', chatToken = '', lastScrollTimestamp = 0;
         let unsubscribeStock, unsubscribeSystem, unsubscribeShipping;
         let currentFontSize = 16, currentGridSize = 1;
-        let isUserScrolledUp = false;
+        let isUserScrolledUp = false; // New flag logic
         
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const synth = window.speechSynthesis;
@@ -405,31 +405,35 @@
         }
 
         function renderDashboardTable() {
-            const dashboard = document.querySelector('.dashboard-overlay');
-            const scrollY = dashboard.scrollTop; // Save Scroll Position
+            const dashboard = document.querySelector('.dashboard-overlay'); // Select overlay to maintain scroll
+            const scrollY = dashboard ? dashboard.scrollTop : 0; // Save scroll
 
-            const tbody = document.getElementById('shipping-body'); tbody.innerHTML = '';
-            const userOrders = {};
-            
-            Object.keys(stockData).forEach(num => {
-                const item = stockData[num]; const uid = item.uid;
-                if (!userOrders[uid]) userOrders[uid] = { name: item.owner, items: [], totalPrice: 0, uid: uid };
-                const price = item.price ? parseInt(item.price) : 0;
-                userOrders[uid].items.push({ num: num, price: price }); userOrders[uid].totalPrice += price;
-            });
+            const tbody = document.getElementById('shipping-body'); 
+            if(tbody) {
+                tbody.innerHTML = '';
+                const userOrders = {};
+                
+                Object.keys(stockData).forEach(num => {
+                    const item = stockData[num]; const uid = item.uid;
+                    if (!userOrders[uid]) userOrders[uid] = { name: item.owner, items: [], totalPrice: 0, uid: uid };
+                    const price = item.price ? parseInt(item.price) : 0;
+                    userOrders[uid].items.push({ num: num, price: price }); userOrders[uid].totalPrice += price;
+                });
 
-            let index = 1; 
-            for (const uid in userOrders) {
-                const order = userOrders[uid]; 
-                let custData = savedNames[uid] || { nick: order.name };
+                let index = 1; 
+                for (const uid in userOrders) {
+                    const order = userOrders[uid]; 
+                    let custData = savedNames[uid] || { nick: order.name };
+                    
+                    const tr = document.createElement('tr');
+                    const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
+                    
+                    tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.askName('${uid}', this.value)"></td><td>${itemStr}</td>`;
+                    tbody.appendChild(tr);
+                }
                 
-                const tr = document.createElement('tr');
-                const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
-                
-                tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.askName('${uid}', this.value)"></td><td>${itemStr}</td>`;
-                tbody.appendChild(tr);
+                if(dashboard) dashboard.scrollTop = scrollY; // Restore scroll
             }
-            dashboard.scrollTop = scrollY; // Restore Scroll Position
         }
 
         function generateNameHtml(uid, realName) {
@@ -471,6 +475,7 @@
             list.appendChild(div);
             
             const vp = document.getElementById('chat-viewport');
+            // FIX SCROLL: Only scroll to bottom if user hasn't scrolled up
             if (!isUserScrolledUp) {
                 vp.scrollTop = vp.scrollHeight; 
             } else {
@@ -481,7 +486,7 @@
         function scrollToBottom() {
             const vp = document.getElementById('chat-viewport');
             vp.scrollTop = vp.scrollHeight;
-            isUserScrolledUp = false;
+            isUserScrolledUp = false; // Reset flag
             document.getElementById('btn-scroll-down').style.display = 'none';
         }
 
@@ -671,7 +676,7 @@ Input Message: "${text}"
 
         function renderGrid() {
             const panel = document.getElementById('stockPanel');
-            const scrollY = panel.scrollTop;
+            const scrollY = panel ? panel.scrollTop : 0; // Save Scroll
 
             const size = parseInt(document.getElementById('stockSize').value) || 70;
             const grid = document.getElementById('stockGrid');
@@ -691,9 +696,10 @@ Input Message: "${text}"
                 item.queue?.forEach(q => { if(q.time > maxTime) { maxTime = q.time; latestId = key; } });
             });
             for(let i=1; i<=size; i++) { if(!stockData[i]) { const el = document.getElementById('stock-'+i); if(el) { el.className='stock-item'; el.classList.remove('blinking-border'); document.getElementById(`status-${i}`).innerText='ว่าง'; document.getElementById(`price-${i}`).innerText=''; document.getElementById(`qbadge-${i}`).style.display='none'; el.querySelector('.lock-icon').style.display='none'; el.querySelector('.source-icon').style.display='none'; } } }
-            if (latestId) { lastScrollTimestamp = maxTime; const target = document.getElementById('stock-'+latestId); if (target) { target.scrollIntoView({behavior:'smooth', block:'center'}); target.classList.add('highlight'); setTimeout(()=>target.classList.remove('highlight'), 1000); } }
+            // Remove auto-scroll to fix jumping
+            // if (latestId) { lastScrollTimestamp = maxTime; const target = document.getElementById('stock-'+latestId); if (target) { target.scrollIntoView({behavior:'smooth', block:'center'}); target.classList.add('highlight'); setTimeout(()=>target.classList.remove('highlight'), 1000); } }
             
-            panel.scrollTop = scrollY; // Restore scroll position
+            if(panel) panel.scrollTop = scrollY; // Restore Scroll
         }
         
         function renderSlot(num, data) {
@@ -882,6 +888,7 @@ Input Message: "${text}"
             try {
                 const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${vid}`);
                 if (!d.items || d.items.length === 0) throw new Error("ID ไม่ถูกต้อง");
+
                 const item = d.items[0];
                 document.getElementById('live-title').innerText = item.snippet.title;
                 saveHistory(vid, item.snippet.title);
@@ -976,7 +983,9 @@ Input Message: "${text}"
             Swal.fire({ title: 'ตั้งค่า Gemini API Key', html: '<a href="https://aistudio.google.com/" target="_blank" style="color:#29b6f6">กดขอ Key ฟรีที่นี่</a>', input: 'text', inputValue: geminiApiKey, footer: geminiApiKey ? '<span style="color:lime">✅ มี Key อยู่ในเครื่องแล้ว</span>' : '' }).then(res => { if (res.value) { geminiApiKey = res.value.trim(); localStorage.setItem('geminiApiKey', geminiApiKey); Swal.fire('บันทึกแล้ว', '', 'success'); } });
         };
         
-        window.testVoice = () => { queueSpeech("ทดสอบเสียง หนึ่ง สอง สาม สี่ ห้า"); };
+        window.testVoice = () => {
+            queueSpeech("ทดสอบเสียง หนึ่ง สอง สาม สี่ ห้า");
+        };
 
         window.adjustZoom = (n) => { currentFontSize+=n; document.documentElement.style.setProperty('--chat-size', currentFontSize+'px'); };
         window.adjustGridZoom = (n) => { currentGridSize+=n; document.documentElement.style.setProperty('--grid-size', currentGridSize+'em'); };
@@ -1222,7 +1231,16 @@ Input Message: "${text}"
 
         setInterval(function() { if (!speechSynthesis.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
         const vp = document.getElementById('chat-viewport');
-        vp.addEventListener('scroll', function() { if(vp.scrollHeight - vp.scrollTop - vp.clientHeight < 100) document.getElementById('btn-scroll-down').style.display = 'none'; else document.getElementById('btn-scroll-down').style.display = 'block'; });
+        vp.addEventListener('scroll', function() { 
+            // Fix: Actually update the global isUserScrolledUp flag
+            const isAtBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 100;
+            isUserScrolledUp = !isAtBottom;
+
+            if(isAtBottom) 
+                document.getElementById('btn-scroll-down').style.display = 'none'; 
+            else 
+                document.getElementById('btn-scroll-down').style.display = 'block'; 
+        });
     </script>
 </body>
 </html>
