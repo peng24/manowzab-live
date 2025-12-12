@@ -4,7 +4,7 @@
     <base target="_top">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Manowzab Command Center V113.16 (Super Sync Fix)</title>
+    <title>Manowzab Command Center V113.17 (Audio Auto-Unlock)</title>
     
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -112,11 +112,10 @@
             position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
             background: linear-gradient(45deg, #6a1b9a, #8e24aa);
             color: white; padding: 10px 25px; border-radius: 30px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.6); z-index: 9999; /* Maximum Priority */
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6); z-index: 9999;
             display: none; align-items: center; gap: 15px;
             font-size: 1.2em; border: 2px solid #ce93d8;
             animation: pulseAi 2s infinite; white-space: nowrap;
-            /* iPad tweak: move down slightly if needed */
             top: max(60px, calc(env(safe-area-inset-top) + 60px));
         }
         .away-timer { font-family: monospace; font-size: 1.3em; font-weight: bold; background: rgba(0,0,0,0.3); padding: 2px 8px; border-radius: 5px; }
@@ -221,7 +220,7 @@
             <div class="status-dot" id="status-dot"></div>
             <div class="live-viewers" id="view-counter">👁️ 0</div>
             <div class="live-title" id="live-title">Offline Mode</div>
-            <div class="version-badge" style="margin-left: auto;">V113.16 (Super Sync Fix)</div>
+            <div class="version-badge" style="margin-left: auto;">V113.17 (Audio Auto-Unlock)</div>
         </div>
     </div>
 
@@ -324,13 +323,20 @@
         // --- 2. AUDIO SYSTEM ---
         function unlockAudio() {
             if (audioCtx.state === 'suspended') {
-                audioCtx.resume().then(() => {
-                    const u = new SpeechSynthesisUtterance(" ");
-                    synth.speak(u);
-                });
+                audioCtx.resume();
             }
+            // Aggressive TTS wake up for iOS
+            if (synth.paused) synth.resume();
+            if (synth.speaking) synth.cancel();
+            
+            // Play silent utterance to unlock audio
+            const u = new SpeechSynthesisUtterance(" ");
+            u.volume = 0;
+            synth.speak(u);
         }
+        // Unlock on first interaction
         document.addEventListener('click', () => { unlockAudio(); }, { once: true });
+        document.addEventListener('touchstart', () => { unlockAudio(); }, { once: true });
 
         function toggleSound() { 
             isSoundOn = !isSoundOn; 
@@ -625,8 +631,15 @@ Input Message: "${text}"
                 if (current.queue?.find(q => q.owner === owner)) return;
             }
 
-            if (!stockData[num]) {
-                const data = { owner, uid, time: Date.now(), queue: [], source: method }; 
+            // Fix 2: Check if slot is truly vacant (no owner), regardless of price presence
+            const isVacant = !stockData[num] || !stockData[num].owner;
+
+            if (isVacant) {
+                const existingData = stockData[num] || {};
+                const data = { 
+                    ...existingData,
+                    owner, uid, time: Date.now(), queue: [], source: method 
+                }; 
                 if (price) data.price = price;
                 set(ref(db, `stock/${currentVideoId}/${num}`), data).then(()=> playDing());
             } else {
@@ -763,40 +776,48 @@ Input Message: "${text}"
             const banner = document.getElementById('awayBanner');
             const newState = val.isAway === true;
 
-            // Update UI State from Firebase
-            if (newState !== currentAwayState) {
-                currentAwayState = newState;
-                if (currentAwayState) {
-                    banner.style.display = 'flex';
-                    awayStartTime = val.startTime || Date.now();
-                    queueSpeech("แอดมินพาลูกเข้านอนแล้ว"); // Sound triggered by state change
-                    if (!awayInterval) {
-                         updateAwayTimer(); 
-                         awayInterval = setInterval(updateAwayTimer, 1000); 
-                    }
-                } else {
-                    banner.style.display = 'none';
-                    queueSpeech("ลูกหลับแล้ว แอดมินสแตนบาย"); // Sound triggered by state change
-                    if (awayInterval) {
-                        clearInterval(awayInterval);
-                        awayInterval = null;
-                    }
-                }
+            // Check if state actually changed to avoid loop
+            if (newState !== (banner.style.display === 'flex')) {
+                 if (newState) {
+                     queueSpeech("แอดมินพาลูกเข้านอนแล้ว");
+                     awayStartTime = val.startTime || Date.now();
+                     banner.style.display = 'flex';
+                     if (!awayInterval) {
+                          updateAwayTimer(); 
+                          awayInterval = setInterval(updateAwayTimer, 1000); 
+                     }
+                 } else {
+                     queueSpeech("ลูกหลับแล้ว แอดมินสแตนบาย");
+                     banner.style.display = 'none';
+                     if (awayInterval) {
+                         clearInterval(awayInterval);
+                         awayInterval = null;
+                     }
+                 }
             }
         });
 
         window.toggleAwayMode = async () => {
-            // Read local state for faster toggle response, but rely on listener for UI update
-            if (currentAwayState) {
-                update(ref(db, 'system/awayMode'), { isAway: false });
-            } else {
-                update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() });
-                set(ref(db, 'system/aiCommander'), myDeviceId); // Auto AI
+            try {
+                // Force audio unlock immediately
+                unlockAudio();
+                const snap = await get(ref(db, 'system/awayMode'));
+                const current = snap.val() || {};
+                if (current.isAway) {
+                    await update(ref(db, 'system/awayMode'), { isAway: false });
+                } else {
+                    // Update Away Mode & Enable AI
+                    await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() });
+                    // Fix: Use set instead of update for simple string value
+                    await set(ref(db, 'system/aiCommander'), myDeviceId);
+                }
+            } catch(e) {
+                console.error("Away Mode Error", e);
             }
         };
 
         function updateAwayTimer() {
-            if (!currentAwayState) return;
+            if (!document.getElementById('awayBanner') || document.getElementById('awayBanner').style.display === 'none') return;
             const diff = Math.floor((Date.now() - awayStartTime) / 1000);
             const minutes = Math.floor(diff / 60);
             const seconds = diff % 60;
@@ -845,6 +866,7 @@ Input Message: "${text}"
         };
 
         function toggleConnection() {
+            unlockAudio(); // Unblock audio context immediately
             if (isConnected) {
                 clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false;
                 document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary";
@@ -872,6 +894,7 @@ Input Message: "${text}"
                 const item = d.items[0];
                 document.getElementById('live-title').innerText = item.snippet.title;
                 saveHistory(vid, item.snippet.title);
+                queueSpeech("เชื่อมต่อสำเร็จ กำลังอ่านคอมเมนต์จาก " + item.snippet.title);
                 isConnected = true; setLoading(false); isConnecting = false;
                 document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
                 document.getElementById('status-dot').className = "status-dot online";
@@ -939,11 +962,42 @@ Input Message: "${text}"
 
         window.handleStockClick = (num) => {
             const current = stockData[num];
+            
+            // Case 1: Vacant Item (allow setting price)
+            if (!current || !current.owner) {
+                const currentPrice = current && current.price ? current.price : '';
+                Swal.fire({
+                    title: `เบอร์ ${num}`,
+                    text: 'ยังว่างอยู่ ใส่ราคาได้นะ',
+                    input: 'number',
+                    inputValue: currentPrice,
+                    showCancelButton: true,
+                    confirmButtonText: 'บันทึกราคา',
+                    cancelButtonText: 'ยกเลิก'
+                }).then((result) => {
+                    if (result.isConfirmed) {
+                        // Keep owner null but set price
+                        const updates = {};
+                        if (!stockData[num]) {
+                            // Initialize with dummy data if doesn't exist to hold price
+                            // Use empty owner string to signify vacant
+                            updates[`stock/${currentVideoId}/${num}`] = { price: result.value, source: 'manual' }; 
+                        } else {
+                            updates[`stock/${currentVideoId}/${num}/price`] = result.value;
+                        }
+                        update(ref(db), updates);
+                    }
+                });
+                return;
+            }
+
+            // Case 2: Sold Item (Queue Management)
             if (current) { 
                 let queueHtml = '';
                 if (current.queue && current.queue.length > 0) {
                     queueHtml = '<div style="margin-top:10px; text-align:left; background:#eee; color:#000; padding:10px; border-radius:6px; border:1px solid #ccc;"><strong>คิวต่อ:</strong><ul style="padding-left:0; margin:10px 0; list-style:none;">';
                     current.queue.forEach((q, idx) => {
+                        // Add Up/Move button logic if needed, simple delete for now
                         queueHtml += `<li style="background:#fff; padding:8px; margin-bottom:4px; border-radius:4px; display:flex; justify-content:space-between; align-items:center; border:1px solid #ddd; font-size:0.95em;">
                             <span><strong style="color:#d32f2f;">${idx+1}.</strong> ${q.owner}</span>
                             <div>
@@ -960,7 +1014,7 @@ Input Message: "${text}"
                     html: `<div style="font-size:1.2em; color:#00e676; margin-bottom:10px;">${current.owner}</div><div style="display:flex; gap:5px; justify-content:center; flex-wrap:wrap;"><button onclick="window.doAction(${num}, 'edit')" class="swal2-confirm swal2-styled" style="background:#1976d2; margin:0;">แก้ชื่อ</button> <button onclick="window.doAction(${num}, 'price')" class="swal2-confirm swal2-styled" style="background:#555; margin:0;">แก้ราคา</button> <button onclick="window.doAction(${num}, 'cancel')" class="swal2-confirm swal2-styled" style="background:#d32f2f; margin:0;">ยกเลิกจอง</button></div>${queueHtml}`, 
                     showConfirmButton: false 
                 }); 
-            } else { Swal.fire({title: `จองเบอร์ ${num}`, input: 'text', placeholder: 'ใส่ชื่อลูกค้า'}).then(r => { if (r.isConfirmed) processOrder(num, r.value || 'ลูกค้า (Manual)', 'manual-'+Date.now(), 'manual'); }); }
+            }
         };
         
         window.removeQueue = (num, idx) => {
