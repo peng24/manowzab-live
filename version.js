@@ -1,10 +1,9 @@
 export const AppInfo = {
-    version: "v2.1.6",
+    version: "v2.1.7",
     releaseDate: "13/12/2025",
     changelog: [
-        "🚑 System: จัดลำดับโค้ดใหม่แบบเข้มงวด (Strict Dependency Order) แก้ปัญหา ReferenceError ถาวร",
-        "🐛 Fix: แก้ไขตัวแปร lastScrollTimestamp และ loadChat หาไม่เจอ",
-        "📡 Debug: เพิ่ม Log ตรวจสอบการเชื่อมต่อ YouTube Live Chat",
-        "🍏 Fix: ปรับปรุงระบบเสียงบน iPad ให้ทำงานทันทีที่แตะหน้าจอ"
+        "🐛 Critical Fix: แก้ไขบั๊กโหลดแชทไม่ต่อเนื่อง (Chat Loop) ทำให้ข้อความบางส่วนหายไป",
+        "🔧 Fix: ปรับปรุงปุ่ม 'แชทใหม่' ให้ทำงานแม่นยำขึ้น เลื่อนลงสุดทันทีที่กด",
+        "⚡ System: เพิ่มความเสถียรในการดึงข้อมูล YouTube API"
     ]
 };
