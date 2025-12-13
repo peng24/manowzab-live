@@ -390,7 +390,9 @@ async function processMessage(item) {
             await processOrder(targetId, ownerName, ownerUid, 'chat', targetPrice, method); 
         } else if (intent === 'cancel') {
             if (isAdmin || (stockData[targetId] && stockData[targetId].uid === uid)) {
-                processCancel(targetId, isAdmin ? 'แอดมินยกเลิก' : 'ว่างแล้วค่ะ');
+                // Modified: Detailed cancellation message
+                const cancelMsg = `${nick} ยกเลิกรายการที่ ${targetId} ค่ะ`;
+                processCancel(targetId, cancelMsg);
             }
         }
     }
@@ -436,14 +438,23 @@ async function processOrder(num, owner, uid, src, price, method = 'manual') {
 function processCancel(num, reason) {
     if (!stockData[num]) return;
     const current = stockData[num];
+    
     if (current.queue && Array.isArray(current.queue) && current.queue.length > 0) {
         const next = current.queue[0];
         const nextQ = current.queue.slice(1);
         const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
         if (current.price) newData.price = current.price;
-        set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => queueSpeech(`เบอร์ ${num} หลุดจอง คุณ ${next.owner} ได้สิทธิ์`));
+        set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
+            // If reason (cancellation message) exists, speak it first
+            if (reason) queueSpeech(reason);
+            // Then speak the queue promotion
+            setTimeout(() => queueSpeech(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
+        });
     } else {
-        remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { playCancel(); if(reason) queueSpeech(reason); });
+        remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { 
+            playCancel(); 
+            if(reason) queueSpeech(reason); 
+        });
     }
 }
 
@@ -732,7 +743,7 @@ window.doAction = (num, action) => {
     Swal.close();
     if (action === 'edit') { Swal.fire({input: 'text', inputValue: stockData[num].owner, title: 'แก้ไขชื่อ (เฉพาะรายการนี้)'}).then(r => { if (r.value) { update(ref(db, `stock/${currentVideoId}/${num}`), {owner: r.value}); } }); } 
     else if (action === 'price') Swal.fire({input: 'number'}).then(r => { if(r.value) update(ref(db, `stock/${currentVideoId}/${num}`), {price: r.value}); });
-    else if (action === 'cancel') processCancel(num, 'แอดมินลบรายการ');
+    else if (action === 'cancel') processCancel(num, `แอดมินลบรายการที่ ${num} ค่ะ`); // Modified: Speak manual cancellation
 };
 
 window.fixDatabase = async () => {
