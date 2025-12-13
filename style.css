@@ -106,7 +106,7 @@ body {
 @keyframes pulseRed { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
 @keyframes pulseMic { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
 
-/* Auto Scroll Highlight (Yellow Pop) */
+/* Auto Scroll Highlight (Yellow Pop) - iOS Optimized */
 @keyframes highlightBox { 0% { transform: scale(1.1); box-shadow: 0 0 20px #ffeb3b; } 100% { transform: scale(1); } }
 @-webkit-keyframes highlightBox { 0% { transform: scale(1.1); box-shadow: 0 0 20px #ffeb3b; } 100% { transform: scale(1); } }
 .stock-item.highlight { 
