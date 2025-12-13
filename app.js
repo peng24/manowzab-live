@@ -4,7 +4,7 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gsta
 import { AppInfo } from "./version.js";
 
 // ============================================================
-// 1. CONFIGURATION
+// 1. CONFIGURATION & STATE (MUST BE FIRST)
 // ============================================================
 const firebaseConfig = {
     apiKey: "AIzaSyAVYqEmdw-AwS1tCElhSaXDLP1Aq35chp0",
@@ -15,9 +15,7 @@ const firebaseConfig = {
 
 const API_KEYS = ["AIzaSyAVzYQN51V-kITnyJWGy8IVSktitxrVD8g", "AIzaSyBlnw6tpETYu61XSNqd7zXt25Fv_vmbWJU", "AIzaSyAX3dwUqBFeCBjjZixVnlcBz56gAfNWzs0", "AIzaSyAxjRAs01mpt-NxQiR3yStr6Q-57EiQq64"];
 
-// ============================================================
-// 2. GLOBAL VARIABLES
-// ============================================================
+// --- GLOBAL VARIABLES ---
 let currentKeyIdx = 0;
 let isConnected = false;
 let isConnecting = false;
@@ -32,12 +30,16 @@ let savedNames = {};
 let shippingData = {};
 let seenMessageIds = {};
 
+// Timers
 let intervalId, viewerIntervalId, simIntervalId, autoDisconnectTimer, chatTimeoutId, awayInterval;
+
+// Chat & Scroll
 let activeChatId = '';
 let chatToken = '';
-let lastScrollTimestamp = 0; 
+let lastScrollTimestamp = 0; // Fixed definition position
 let unsubscribeStock, unsubscribeSystem;
 
+// UI
 let currentFontSize = 16;
 let currentGridSize = 1;
 let isUserScrolledUp = false;
@@ -66,39 +68,75 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
-// Check Version
+// Check Version & Auto-Reload
 const localVer = localStorage.getItem('app_version');
 if (localVer !== AppInfo.version) {
-    console.log(`Version update: ${localVer} -> ${AppInfo.version}`);
+    console.log(`System Upgrade: ${localVer} -> ${AppInfo.version}`);
     localStorage.setItem('app_version', AppInfo.version);
     window.location.reload(true);
 }
 
 // SWAL Config
-const ModalSwal = Swal.mixin({
-    heightAuto: false,
-    scrollbarPadding: false
-});
+const ModalSwal = Swal.mixin({ heightAuto: false, scrollbarPadding: false });
 window.Swal = ModalSwal;
 
 const Toast = Swal.mixin({
-    toast: true,
-    position: 'top', 
-    showConfirmButton: false,
-    timer: 3000,
-    timerProgressBar: true,
-    heightAuto: false,
-    didOpen: (toast) => {
-        toast.addEventListener('mouseenter', Swal.stopTimer)
-        toast.addEventListener('mouseleave', Swal.resumeTimer)
-    }
+    toast: true, position: 'top', showConfirmButton: false, timer: 3000, timerProgressBar: true, heightAuto: false,
+    didOpen: (toast) => { toast.addEventListener('mouseenter', Swal.stopTimer); toast.addEventListener('mouseleave', Swal.resumeTimer); }
 });
 
 // ============================================================
-// 3. ALL FUNCTIONS (Declared explicitly to prevent ReferenceError)
+// 2. HELPER FUNCTIONS (DEPENDENCY LEVEL 0)
 // ============================================================
+function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
+function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
+function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
 
-// --- Audio System ---
+function updateStatusIcon(id, status) { 
+    const el = document.getElementById(id);
+    if(el) { el.className = 'status-item'; el.classList.add(status); }
+}
+
+function updateKeyDisplay() { 
+    const el = document.getElementById('stat-key');
+    if(el) el.innerHTML = `<i class="fa-solid fa-key"></i> ${currentKeyIdx + 1}`; 
+}
+
+function setLoading(s) { 
+    const btn = document.getElementById('btnConnect');
+    if(btn) btn.disabled = s; 
+}
+
+function saveHistory(vid, title) { 
+    if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); 
+}
+
+function updateAwayTimer() {
+    if (!currentAwayState) return;
+    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
+    const minutes = Math.floor(diff / 60);
+    const seconds = diff % 60;
+    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const el = document.getElementById('awayTimer');
+    if (el) el.innerText = text;
+}
+
+function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
+
+function generateNameHtml(uid, realName) {
+    const color = stringToColor(uid); 
+    let nick = realName;
+    let displayName = realName;
+    let isNickSet = false;
+    if (savedNames[uid]) { if (typeof savedNames[uid] === 'object') { nick = savedNames[uid].nick; } else { nick = savedNames[uid]; } isNickSet = true; displayName = nick; }
+    const valueToEdit = isNickSet ? nick : realName;
+    let vipClass = "";
+    if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
+    if (isNickSet) { return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`; }
+    return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
+}
+
+// --- AUDIO HELPERS ---
 function initAudio() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -110,16 +148,19 @@ function unlockAudio() {
     if (isAudioUnlocked) return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
     synth.cancel();
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    g.gain.value = 0;
-    o.connect(g);
-    g.connect(audioCtx.destination);
-    o.start(0);
-    o.stop(0.1);
+    // Silent play to force iOS Audio Wakeup
+    const buffer = audioCtx.createBuffer(1, 1, 22050);
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioCtx.destination);
+    source.start(0);
     isAudioUnlocked = true;
-    console.log("Audio Unlocked");
+    console.log("🔊 Audio Unlocked");
 }
+// Attach to multiple events for iPad/iPhone
+['click', 'touchstart', 'touchend', 'keydown'].forEach(evt => {
+    document.addEventListener(evt, unlockAudio, { once: false });
+});
 
 function queueSpeech(txt) { 
     if(!isSoundOn) return; 
@@ -172,46 +213,9 @@ function playCancel() {
     g.gain.setValueAtTime(0.2, audioCtx.currentTime); 
     o.start(); o.stop(audioCtx.currentTime+0.3); 
 }
+setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
-// --- Helper Functions ---
-function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
-function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
-function updateStatusIcon(id, status) { 
-    const el = document.getElementById(id);
-    if(el) { el.className = 'status-item'; el.classList.add(status); }
-}
-function updateKeyDisplay() { 
-    const el = document.getElementById('stat-key');
-    if(el) el.innerHTML = `<i class="fa-solid fa-key"></i> ${currentKeyIdx + 1}`; 
-}
-function setLoading(s) { const btn = document.getElementById('btnConnect'); if(btn) btn.disabled = s; }
-function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
-function saveHistory(vid, title) { if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); }
-function updateAwayTimer() {
-    if (!currentAwayState) return;
-    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
-    const minutes = Math.floor(diff / 60);
-    const seconds = diff % 60;
-    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    const el = document.getElementById('awayTimer');
-    if (el) el.innerText = text;
-}
-function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
-
-function generateNameHtml(uid, realName) {
-    const color = stringToColor(uid); 
-    let nick = realName;
-    let displayName = realName;
-    let isNickSet = false;
-    if (savedNames[uid]) { if (typeof savedNames[uid] === 'object') { nick = savedNames[uid].nick; } else { nick = savedNames[uid]; } isNickSet = true; displayName = nick; }
-    const valueToEdit = isNickSet ? nick : realName;
-    let vipClass = "";
-    if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
-    if (isNickSet) { return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`; }
-    return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
-}
-
-// --- Init Functions ---
+// --- INIT HELPERS ---
 function initVersionControl() {
     const badge = document.querySelector('.version-badge');
     if (badge) {
@@ -247,8 +251,6 @@ function initTooltips() {
         'btnConnect': 'เชื่อมต่อ YouTube', 'btnSound': 'เปิด/ปิดเสียง', 'stockSize': 'จำนวนรายการ'
     };
     for(const [id, text] of Object.entries(tips)) { const el = document.getElementById(id); if(el) el.title = text; }
-    const histBtn = document.querySelector('button[onclick="window.openHistory()"]');
-    if(histBtn) histBtn.title = "ดูประวัติการไลฟ์ย้อนหลัง";
 }
 
 function syncAiCommanderStatus() {
@@ -262,13 +264,56 @@ function syncAiCommanderStatus() {
     });
 }
 
-// --- Data Logic Functions ---
-function updateStats() { 
-    const total = parseInt(document.getElementById('stockSize').value) || 70;
-    const soldCount = Object.keys(stockData).filter(k => stockData[k].owner).length; 
-    document.getElementById('sold-count').innerText = soldCount;
-    document.getElementById('total-count').innerText = total;
+// ============================================================
+// 3. CORE LOGIC FUNCTIONS (DEPENDENCY LEVEL 1)
+// ============================================================
+
+async function processOrder(num, owner, uid, src, price, method = 'manual') {
+    const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
+    try {
+        await runTransaction(itemRef, (currentData) => {
+            if (currentData === null) {
+                return { owner, uid, time: Date.now(), queue: [], source: method, price: price || null };
+            } else if (!currentData.owner) {
+                currentData.owner = owner; currentData.uid = uid; currentData.time = Date.now(); currentData.source = method;
+                if(price) currentData.price = price; if(!currentData.queue) currentData.queue = [];
+                return currentData;
+            } else {
+                if (currentData.owner === owner) return; 
+                const queue = currentData.queue || [];
+                if (queue.find(q => q.owner === owner)) return; 
+                queue.push({ owner, uid, time: Date.now() });
+                currentData.queue = queue;
+                return currentData;
+            }
+        });
+        // Sound is handled by listener for consistency
+    } catch (e) { console.error("Transaction failed: ", e); }
 }
+
+function processCancel(num, reason) {
+    if (!stockData[num]) return;
+    const current = stockData[num];
+    if (current.queue && Array.isArray(current.queue) && current.queue.length > 0) {
+        const next = current.queue[0];
+        const nextQ = current.queue.slice(1);
+        const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
+        if (current.price) newData.price = current.price;
+        set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
+            if (reason) queueSpeech(reason);
+            setTimeout(() => queueSpeech(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
+        });
+    } else {
+        remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { 
+            playCancel(); 
+            if(reason) queueSpeech(reason); 
+        });
+    }
+}
+
+// ============================================================
+// 4. DISPLAY FUNCTIONS (DEPENDENCY LEVEL 2)
+// ============================================================
 
 function renderSlot(num, data) {
     const el = document.getElementById('stock-' + num); if(!el) return;
@@ -333,108 +378,76 @@ function renderGrid() {
     if(panel) requestAnimationFrame(() => { panel.scrollTop = previousScrollTop; });
 }
 
-function connectToStock(vid) {
-    if (unsubscribeStock) unsubscribeStock();
-    currentVideoId = vid; lastScrollTimestamp = Date.now();
-    let isFirstLoad = true; 
-    unsubscribeStock = onValue(ref(db, `stock/${vid}`), snap => {
-        const val = snap.val() || {};
-        if (!isFirstLoad) {
-            const keys = Object.keys({...val, ...stockData});
-            for (const key of keys) {
-                const newItem = val[key];
-                const oldItem = stockData[key];
-                if (newItem?.owner && (!oldItem || !oldItem.owner)) {
-                     playDing(); 
-                     setTimeout(() => {
-                        const el = document.getElementById('stock-' + key);
-                        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('highlight'); }
-                    }, 50);
-                }
-                if ((!newItem || !newItem.owner) && oldItem?.owner) { playCancel(); }
-            }
-        }
-        stockData = val; renderGrid(); updateStats(); window.updateShippingButton();
-        if(document.getElementById('dashboard').style.display === 'flex') window.renderDashboardTable();
-        isFirstLoad = false;
-    });
+function updateStats() { 
+    const total = parseInt(document.getElementById('stockSize').value) || 70;
+    const soldCount = Object.keys(stockData).filter(k => stockData[k].owner).length; 
+    document.getElementById('sold-count').innerText = soldCount;
+    document.getElementById('total-count').innerText = total;
 }
 
-async function processOrder(num, owner, uid, src, price, method = 'manual') {
-    const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
+function renderChat(name, msg, type, uid, img, realName, detectionMethod = null) {
+    const div = document.createElement('div'); div.className = `chat-row ${type} new-msg`;
+    let tagHtml = '';
+    if (detectionMethod === 'regex') tagHtml = '<button class="tag-source regex" title="ตรวจจับด้วย Pattern"><i class="fa-solid fa-bolt"></i></button>';
+    else if (detectionMethod === 'ai') tagHtml = '<button class="tag-source ai" title="ตรวจจับด้วย AI"><i class="fa-solid fa-robot"></i></button>';
+    div.innerHTML = `<img src="${img}" class="avatar"><div class="chat-content"><div class="chat-header" data-uid="${uid}" data-realname="${escapeHtml(realName)}">${generateNameHtml(uid, realName)} ${tagHtml}</div><div class="chat-msg">${msg}</div></div>`;
+    const list = document.getElementById('chat-list'); list.appendChild(div);
+    const vp = document.getElementById('chat-viewport');
+    if (!isUserScrolledUp) { vp.scrollTop = vp.scrollHeight; } 
+    else { document.getElementById('btn-scroll-down').style.display = 'block'; }
+}
+
+// ============================================================
+// 5. EXTERNAL API FUNCTIONS (DEPENDENCY LEVEL 3)
+// ============================================================
+
+async function analyzeChatWithAI(text) {
+    if (!geminiApiKey || !isAiCommander) return null;
+    const prompt = `
+Role: You are an AI assistant for a Thai live commerce clothing shop (Manowzab). 
+Your task is to extract the user's intent from their chat message.
+
+Key Entities:
+- **Product ID**: Usually a number (e.g., 1, 15, 99) or starts with F/CF (e.g., F1, CF10).
+- **Price**: A number usually followed by "บาท" or appearing after the ID (e.g., 10=100).
+
+Intents:
+1. **buy**: User wants to purchase an item.
+   - Pattern: "[ID]", "F[ID]", "CF[ID]", "รับ [ID]", "[ID] [Name]", "[ID]=[Price]".
+   - Examples: "10", "F10", "10 ครับ", "10 น้องบี", "10 100", "เอา 10".
+   - CRITICAL EXCEPTION: If the message contains specific question words (เท่าไหร่, ไหม, หรอ, หรือ, ไง) OR specific attribute words (อก, เอว, ยาว, สี, ผ้า, ตำหนิ) appearing alongside a number, it is ALWAYS a "question", NOT a "buy".
+     - "50 สีอะไร" -> question
+     - "10 อกเท่าไหร่" -> question
+     - "50 มีตำหนิไหม" -> question
+     - "ผ้าอะไร 10" -> question
+
+2. **cancel**: User wants to cancel an order.
+   - Pattern: "CC", "cancel", "ยกเลิก", "ไม่เอา".
+   - Examples: "CC 10", "ยกเลิก 10", "ไม่เอา 10 แล้ว".
+
+3. **question**: User is asking about product details.
+   - Keywords: อก, เอว, ยาว, ผ้า, ราคา, สี, ว่างไหม, ทันไหม, เท่าไหร่, กี่บาท, แบบไหน, ดู, ตำหนิ.
+   - Examples: "10 ว่างไหม", "อก 50 ไหม", "ขอดู 10", "50 สีอะไร".
+
+4. **shipping**: User wants to ship items.
+   - Keywords: "พร้อมส่ง", "สรุปยอด", "ส่งของ", "คิดเงิน".
+
+5. **spam**: Greetings, chit-chat.
+
+Response Format (JSON only):
+{"intent": "buy"|"cancel"|"question"|"shipping"|"spam", "id": number|null, "price": number|null}
+
+Input Message: "${text}"
+`;
     try {
-        await runTransaction(itemRef, (currentData) => {
-            if (currentData === null) {
-                return { owner, uid, time: Date.now(), queue: [], source: method, price: price || null };
-            } else if (!currentData.owner) {
-                currentData.owner = owner; currentData.uid = uid; currentData.time = Date.now(); currentData.source = method;
-                if(price) currentData.price = price; if(!currentData.queue) currentData.queue = [];
-                return currentData;
-            } else {
-                if (currentData.owner === owner) return; 
-                const queue = currentData.queue || [];
-                if (queue.find(q => q.owner === owner)) return; 
-                queue.push({ owner, uid, time: Date.now() });
-                currentData.queue = queue;
-                return currentData;
-            }
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
         });
-        const current = stockData[num];
-        if (current && current.owner === owner) playDing();
-    } catch (e) { console.error("Transaction failed: ", e); }
-}
-
-function processCancel(num, reason) {
-    if (!stockData[num]) return;
-    const current = stockData[num];
-    if (current.queue && Array.isArray(current.queue) && current.queue.length > 0) {
-        const next = current.queue[0];
-        const nextQ = current.queue.slice(1);
-        const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
-        if (current.price) newData.price = current.price;
-        set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
-            if (reason) queueSpeech(reason);
-            setTimeout(() => queueSpeech(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
-        });
-    } else {
-        remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { 
-            playCancel(); 
-            if(reason) queueSpeech(reason); 
-        });
-    }
-}
-
-async function smartFetch(url) {
-    try {
-        updateStatusIcon('stat-api', 'ok'); let res = await fetch(url + "&key=" + API_KEYS[currentKeyIdx]); let data = await res.json();
-        if (data.error) { 
-            if (currentKeyIdx < API_KEYS.length - 1) { currentKeyIdx++; return smartFetch(url); } 
-            else { Swal.fire('API Key Error', 'โควต้าเต็มทุกคีย์แล้ว', 'error'); throw new Error(data.error.message); }
-        }
-        return data;
-    } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
-}
-
-async function loadChat() {
-    if (!isConnected || !activeChatId) return; if (isSimulating) return;
-    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
-    try {
-        const data = await smartFetch(url);
-        if (data.items) { 
-            updateStatusIcon('stat-chat', 'ok'); 
-            for (const item of data.items) { await processMessage(item); }
-            chatToken = data.nextPageToken; 
-        }
-        const delay = data.pollingIntervalMillis || 5000; chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
-    } catch(e) { updateStatusIcon('stat-chat', 'err'); chatTimeoutId = setTimeout(loadChat, 10000); }
-}
-
-async function updateViewerCount(vid) {
-    try {
-        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${vid}`);
-        if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 180000); }
-        if (d.items?.[0]) document.getElementById('view-counter').innerText = "👁️ " + Number(d.items[0].liveStreamingDetails.concurrentViewers||0).toLocaleString();
-    } catch (e) { console.error("Viewer Count Error:", e); }
+        const result = await response.json();
+        const match = result.candidates?.[0]?.content?.parts?.[0]?.text?.match(/\{.*?\}/s);
+        return match ? JSON.parse(match[0]) : null;
+    } catch (e) { return null; }
 }
 
 async function processMessage(item) {
@@ -485,8 +498,91 @@ async function processMessage(item) {
     }
 }
 
+async function smartFetch(url) {
+    try {
+        updateStatusIcon('stat-api', 'ok'); let res = await fetch(url + "&key=" + API_KEYS[currentKeyIdx]); let data = await res.json();
+        if (data.error) { 
+            if (currentKeyIdx < API_KEYS.length - 1) { currentKeyIdx++; return smartFetch(url); } 
+            else { Swal.fire('API Key Error', 'โควต้าเต็มทุกคีย์แล้ว', 'error'); throw new Error(data.error.message); }
+        }
+        return data;
+    } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
+}
+
+// Defined BEFORE usage in connectYoutube
+async function loadChat() {
+    if (!isConnected || !activeChatId) return; if (isSimulating) return;
+    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
+    try {
+        const data = await smartFetch(url);
+        if (data.items) { 
+            updateStatusIcon('stat-chat', 'ok'); 
+            for (const item of data.items) { await processMessage(item); }
+            chatToken = data.nextPageToken; 
+        }
+        const delay = data.pollingIntervalMillis || 5000; chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
+    } catch(e) { updateStatusIcon('stat-chat', 'err'); chatTimeoutId = setTimeout(loadChat, 10000); }
+}
+
+async function updateViewerCount(vid) {
+    try {
+        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${vid}`);
+        if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 180000); }
+        if (d.items?.[0]) document.getElementById('view-counter').innerText = "👁️ " + Number(d.items[0].liveStreamingDetails.concurrentViewers||0).toLocaleString();
+    } catch (e) { console.error("Viewer Count Error:", e); }
+}
+
+async function connectYoutube(vid) {
+    try {
+        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${vid}`);
+        if (!d.items || d.items.length === 0) throw new Error("ID ไม่ถูกต้อง");
+        const item = d.items[0];
+        document.getElementById('live-title').innerText = item.snippet.title;
+        saveHistory(vid, item.snippet.title);
+        queueSpeech("เชื่อมต่อสำเร็จ กำลังอ่านคอมเมนต์จาก " + item.snippet.title);
+        isConnected = true; setLoading(false); isConnecting = false;
+        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
+        updateStatusIcon('stat-api', 'ok');
+        if (item.liveStreamingDetails?.activeLiveChatId) {
+            activeChatId = item.liveStreamingDetails.activeLiveChatId; chatToken = ''; loadChat(); updateViewerCount(vid); viewerIntervalId = setInterval(()=>updateViewerCount(vid), 15000);
+        } else { activeChatId = null; throw new Error("No Live Chat"); }
+    } catch(e) { 
+        console.error(e); 
+        isConnected = true; setLoading(false); isConnecting = false; 
+        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark"; 
+        updateStatusIcon('stat-api', 'err'); 
+    }
+}
+
+function connectToStock(vid) {
+    if (unsubscribeStock) unsubscribeStock();
+    currentVideoId = vid; lastScrollTimestamp = Date.now();
+    let isFirstLoad = true; 
+    unsubscribeStock = onValue(ref(db, `stock/${vid}`), snap => {
+        const val = snap.val() || {};
+        if (!isFirstLoad) {
+            const keys = Object.keys({...val, ...stockData});
+            for (const key of keys) {
+                const newItem = val[key];
+                const oldItem = stockData[key];
+                if (newItem?.owner && (!oldItem || !oldItem.owner)) {
+                     playDing(); 
+                     setTimeout(() => {
+                        const el = document.getElementById('stock-' + key);
+                        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('highlight'); }
+                    }, 50);
+                }
+                if ((!newItem || !newItem.owner) && oldItem?.owner) { playCancel(); }
+            }
+        }
+        stockData = val; renderGrid(); updateStats(); window.updateShippingButton();
+        if(document.getElementById('dashboard').style.display === 'flex') window.renderDashboardTable();
+        isFirstLoad = false;
+    });
+}
+
 // ============================================================
-// 4. WINDOW BINDINGS (ASSIGNED AFTER DEFINITIONS)
+// 6. WINDOW EXPORTS (Assigned AFTER all definitions)
 // ============================================================
 
 window.forceUpdate = () => { if(confirm('ยืนยันการโหลดโปรแกรมใหม่?')) { localStorage.removeItem('app_version'); window.location.reload(true); } };
@@ -692,7 +788,7 @@ window.toggleSimulation = () => {
 };
 
 // ============================================================
-// 5. EXECUTION START
+// 7. STARTUP (LISTENER ATTACHMENT)
 // ============================================================
 signInAnonymously(auth);
 remove(ref(db, 'stock/demo'));
@@ -778,7 +874,3 @@ if (vp) {
         else document.getElementById('btn-scroll-down').style.display = 'block'; 
     });
 }
-
-// Add touch events for iPad audio
-document.addEventListener('touchstart', unlockAudio, { once: false });
-document.addEventListener('click', unlockAudio, { once: false });
