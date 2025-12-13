@@ -16,7 +16,7 @@ const firebaseConfig = {
 const API_KEYS = ["AIzaSyAVzYQN51V-kITnyJWGy8IVSktitxrVD8g", "AIzaSyBlnw6tpETYu61XSNqd7zXt25Fv_vmbWJU", "AIzaSyAX3dwUqBFeCBjjZixVnlcBz56gAfNWzs0", "AIzaSyAxjRAs01mpt-NxQiR3yStr6Q-57EiQq64"];
 
 // ============================================================
-// 2. GLOBAL VARIABLES
+// 2. GLOBAL VARIABLES (Declared FIRST)
 // ============================================================
 let currentKeyIdx = 0;
 let isConnected = false;
@@ -32,11 +32,20 @@ let savedNames = {};
 let shippingData = {};
 let seenMessageIds = {};
 
-let intervalId, viewerIntervalId, simIntervalId, autoDisconnectTimer, chatTimeoutId;
+// Timers & Intervals
+let intervalId;
+let viewerIntervalId;
+let simIntervalId;
+let autoDisconnectTimer;
+let chatTimeoutId;
+let awayInterval = null;
+
+// Chat & Scroll
 let activeChatId = '';
 let chatToken = '';
 let lastScrollTimestamp = 0; 
-let unsubscribeStock, unsubscribeSystem;
+let unsubscribeStock;
+let unsubscribeSystem;
 
 let currentFontSize = 16;
 let currentGridSize = 1;
@@ -54,7 +63,6 @@ let isAudioUnlocked = false;
 // Away Mode
 let isAway = false;
 let awayStartTime = 0;
-let awayInterval = null;
 let currentAwayState = false;
 
 // History
@@ -67,7 +75,7 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
-// Check Version
+// Check Version & Reload
 const localVer = localStorage.getItem('app_version');
 if (localVer !== AppInfo.version) {
     console.log(`Version update: ${localVer} -> ${AppInfo.version}`);
@@ -96,10 +104,10 @@ const Toast = Swal.mixin({
 });
 
 // ============================================================
-// 3. CORE LOGIC FUNCTIONS (HOISTED UP)
+// 3. LOGIC FUNCTIONS (DEFINED BEFORE ASSIGNMENT)
 // ============================================================
 
-// --- Audio System ---
+// --- Audio Logic ---
 function initAudio() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -214,7 +222,7 @@ function generateNameHtml(uid, realName) {
     return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
 }
 
-// --- Logic Implementation ---
+// --- Order Processing Logic ---
 async function processOrder(num, owner, uid, src, price, method = 'manual') {
     const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
     try {
@@ -259,6 +267,7 @@ function processCancel(num, reason) {
     }
 }
 
+// --- Grid Rendering ---
 function renderSlot(num, data) {
     const el = document.getElementById('stock-' + num); if(!el) return;
     if (!data.owner) {
@@ -330,6 +339,7 @@ function updateStats() {
     document.getElementById('total-count').innerText = total;
 }
 
+// --- Connections ---
 function connectToStock(vid) {
     if (unsubscribeStock) unsubscribeStock();
     currentVideoId = vid; lastScrollTimestamp = Date.now();
@@ -441,6 +451,84 @@ window.filterHistory = () => { historyCurrentPage = 1; window.renderHistoryPage(
 window.deleteHistory = (vid) => { Swal.fire({title:'ลบประวัติ?', showCancelButton:true}).then(r=>{ if(r.isConfirmed) remove(ref(db, 'history/'+vid)).then(() => window.loadHistoryList()); }); };
 window.toggleShowAll = () => { window.renderDashboardTable(); };
 window.toggleAwayMode = async () => { try { unlockAudio(); const snap = await get(ref(db, 'system/awayMode')); const current = snap.val() || {}; if (current.isAway) { await update(ref(db, 'system/awayMode'), { isAway: false }); } else { await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() }); await set(ref(db, 'system/aiCommander'), myDeviceId); } } catch(e) { console.error("Away Mode Error", e); } };
+window.toggleConnection = () => { /* Defined above */ 
+    if (isConnected) {
+        clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false;
+        document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary";
+        document.getElementById('status-dot').className = "status-dot"; queueSpeech("หยุดการเชื่อมต่อ"); 
+        chatToken = ''; return;
+    }
+    const vid = document.getElementById('vidInput').value.trim();
+    if (!vid) return Swal.fire('Error', 'ใส่ Video ID ก่อน', 'error');
+    isConnecting = true; setLoading(true); if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    currentVideoId = vid; connectToStock(vid); set(ref(db, 'system/activeVideo'), vid); 
+    chatToken = '';
+    connectYoutube(vid).catch(e => { 
+        Swal.fire({ icon: 'info', title: 'เชื่อมต่อวิดีโอแล้ว', text: 'ไม่พบห้องแชทสด (อาจเป็นคลิปย้อนหลัง) ระบบจะทำงานในโหมดรับคำสั่งเสียง/กดเองเท่านั้น', timer: 3000 });
+        isConnected = true; setLoading(false); isConnecting = false;
+        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
+        document.getElementById('status-dot').className = "status-dot online";
+    });
+};
+window.renderDashboardTable = () => { /* Defined above */ 
+    const dashboard = document.querySelector('.dashboard-overlay');
+    const scrollY = dashboard ? dashboard.scrollTop : 0; 
+    const tbody = document.getElementById('shipping-body'); 
+    if(tbody) {
+        tbody.innerHTML = '';
+        const userOrders = {};
+        const allBuyerUids = new Set();
+        Object.keys(stockData).forEach(num => {
+            const item = stockData[num]; 
+            if(item.uid) {
+                allBuyerUids.add(item.uid);
+                if (!userOrders[item.uid]) userOrders[item.uid] = { name: item.owner, items: [], totalPrice: 0, uid: item.uid };
+                const price = item.price ? parseInt(item.price) : 0;
+                userOrders[item.uid].items.push({ num: num, price: price });
+                userOrders[item.uid].totalPrice += price;
+            }
+        });
+        const currentShipping = shippingData[currentVideoId] || {};
+        const readyUids = [...allBuyerUids].filter(uid => currentShipping[uid] && currentShipping[uid].ready);
+        const notReadyUids = [...allBuyerUids].filter(uid => !(currentShipping[uid] && currentShipping[uid].ready));
+        if (notReadyUids.length > 0) {
+            const addRow = document.createElement('tr');
+            addRow.innerHTML = `<td colspan="3" style="text-align:center; padding:10px; background:#2a2a2a;"><div style="display:flex; gap:10px; justify-content:center; align-items:center;"><i class="fa-solid fa-user-plus"></i><select id="manualShipSelect" style="padding:5px; border-radius:4px; background:#444; color:#fff; border:1px solid #555; max-width:200px;"><option value="">-- เลือกลูกค้าเพื่อส่งของ --</option>${notReadyUids.map(uid => `<option value="${uid}">${savedNames[uid]?.nick || userOrders[uid].name}</option>`).join('')}</select><button class="btn btn-success" onclick="window.manualAddShipping()" style="padding:4px 10px; font-size:0.9em;">เพิ่ม</button></div></td>`;
+            tbody.appendChild(addRow);
+        } else if (allBuyerUids.size > 0 && readyUids.length === allBuyerUids.size) {
+             const infoRow = document.createElement('tr'); infoRow.innerHTML = `<td colspan="3" style="text-align:center; color:#00e676; padding:10px;">✅ ลูกค้าทุกคนอยู่ในรายการส่งของแล้ว</td>`; tbody.appendChild(infoRow);
+        }
+        if (readyUids.length === 0) {
+            const emptyRow = document.createElement('tr'); emptyRow.innerHTML = `<td colspan="3" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`; tbody.appendChild(emptyRow);
+        } else {
+            let index = 1;
+            readyUids.forEach(uid => {
+                const order = userOrders[uid];
+                let custData = savedNames[uid] || { nick: order.name };
+                const tr = document.createElement('tr');
+                const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
+                tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`;
+                tbody.appendChild(tr);
+            });
+        }
+        if(dashboard) dashboard.scrollTop = scrollY;
+    }
+};
+window.loadHistoryList = async () => { /* Defined above */ 
+    const list = document.getElementById('history-list');
+    list.innerHTML = '<li style="text-align:center; color:#888;">กำลังโหลดประวัติ...</li>';
+    try {
+        const snapshot = await get(ref(db, 'history'));
+        const items = [];
+        snapshot.forEach(c => items.push({ id: c.key, ...c.val() }));
+        items.sort((a,b) => (b.timestamp||0)-(a.timestamp||0));
+        allHistoryData = items;
+        historyCurrentPage = 1;
+        window.renderHistoryPage();
+    } catch(e) {
+        list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
+    }
+};
 
 window.handleStockClick = (num) => {
     const current = stockData[num];
