@@ -10,7 +10,6 @@ const firebaseConfig = {
     projectId: "manowlive-chat"
 };
 
-// YouTube API Keys Rotation (Client-side usage specifically for this app)
 const API_KEYS = ["AIzaSyAVzYQN51V-kITnyJWGy8IVSktitxrVD8g", "AIzaSyBlnw6tpETYu61XSNqd7zXt25Fv_vmbWJU", "AIzaSyAX3dwUqBFeCBjjZixVnlcBz56gAfNWzs0", "AIzaSyAxjRAs01mpt-NxQiR3yStr6Q-57EiQq64"];
 
 // --- INITIALIZATION ---
@@ -18,8 +17,7 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
-// --- SWAL OVERRIDE (Fix Scroll Jump) ---
-// Configures SweetAlert2 globally to prevent layout shifts
+// --- SWAL OVERRIDE ---
 if (window.Swal) {
     window.Swal = window.Swal.mixin({
         heightAuto: false, 
@@ -139,6 +137,18 @@ function playDing() { if(!isSoundOn) return; const o = audioCtx.createOscillator
 function playCancel() { if(!isSoundOn) return; const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.type='sawtooth'; o.connect(g); g.connect(audioCtx.destination); o.frequency.setValueAtTime(150, audioCtx.currentTime); g.gain.setValueAtTime(0.2, audioCtx.currentTime); o.start(); o.stop(audioCtx.currentTime+0.3); }
 setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
+// --- HELPER FUNCTIONS DEFINITIONS ---
+// Define this BEFORE it is called
+function syncAiCommanderStatus() {
+    onValue(ref(db, 'system/aiCommander'), (snap) => {
+        const commanderId = snap.val();
+        const btn = document.getElementById('btnAICommander');
+        if (commanderId === myDeviceId) { isAiCommander = true; btn.innerHTML = '🤖 AI: เปิด (Commander)'; btn.className = 'btn btn-ai active'; } 
+        else if (commanderId) { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด (เครื่องอื่นคุม)'; btn.className = 'btn btn-ai remote'; } 
+        else { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด'; btn.className = 'btn btn-ai inactive'; }
+    });
+}
+
 // --- UI FUNCTIONS ---
 window.askName = (uid, old) => { 
     Swal.fire({title: 'ตั้งชื่อเล่น', input: 'text', inputValue: old}).then(r => { 
@@ -215,7 +225,7 @@ function generateNameHtml(uid, realName) {
         if (typeof savedNames[uid] === 'object') {
             nick = savedNames[uid].nick;
         } else {
-             nick = savedNames[uid]; 
+                     nick = savedNames[uid]; 
         }
         isNickSet = true;
         displayName = nick;
@@ -392,10 +402,10 @@ async function processOrder(num, owner, uid, src, price, method = 'manual') {
     try {
         await runTransaction(itemRef, (currentData) => {
             if (currentData === null) {
-                // Slot is empty
+                // Slot is empty, claim it
                 return { owner, uid, time: Date.now(), queue: [], source: method, price: price || null };
             } else if (!currentData.owner) {
-                // Slot vacant (no owner)
+                // Slot exists but has no owner (e.g. only price was set)
                 currentData.owner = owner;
                 currentData.uid = uid;
                 currentData.time = Date.now();
@@ -404,7 +414,7 @@ async function processOrder(num, owner, uid, src, price, method = 'manual') {
                 if(!currentData.queue) currentData.queue = [];
                 return currentData;
             } else {
-                // Slot occupied - add to queue
+                // Slot occupied
                 if (currentData.owner === owner) return; 
                 const queue = currentData.queue || [];
                 if (queue.find(q => q.owner === owner)) return; 
@@ -415,7 +425,6 @@ async function processOrder(num, owner, uid, src, price, method = 'manual') {
             }
         });
         
-        // Visual feedback logic relies on listener, but can trigger sound here
         const current = stockData[num];
         if (current && current.owner === owner) playDing();
 
@@ -463,7 +472,7 @@ function renderGrid() {
             if(el) { 
                 el.className='stock-item'; 
                 el.classList.remove('new-order');
-                el.classList.remove('blinking-border'); // Cleanup legacy class
+                el.classList.remove('blinking-border');
                 document.getElementById(`status-${i}`).innerText='ว่าง'; 
                 document.getElementById(`price-${i}`).innerText=''; 
                 document.getElementById(`qbadge-${i}`).style.display='none'; 
@@ -502,7 +511,6 @@ function renderSlot(num, data) {
     const isNewOrder = (Date.now() - data.time) < 15000;
     if (isNewOrder) {
         el.classList.add('new-order');
-        // Auto remove class after time expires
         const remaining = 15000 - (Date.now() - data.time);
         setTimeout(() => el.classList.remove('new-order'), remaining);
     } else {
@@ -572,7 +580,7 @@ function connectToStock(vid) {
                         const el = document.getElementById('stock-' + key);
                         if (el) {
                             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            el.classList.add('highlight'); // Visual Pop
+                            el.classList.add('highlight');
                         }
                     }, 50);
                     break;
