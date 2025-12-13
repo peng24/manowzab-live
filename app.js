@@ -94,7 +94,7 @@ const Toast = Swal.mixin({
 });
 
 // ============================================================
-// 2. HELPER FUNCTIONS (Pure Logic)
+// 2. HELPER FUNCTIONS
 // ============================================================
 
 function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
@@ -120,7 +120,7 @@ function setLoading(s) {
 }
 
 // ============================================================
-// 3. CORE LOGIC FUNCTIONS (Hoisted)
+// 3. CORE LOGIC FUNCTIONS
 // ============================================================
 
 function initVersionControl() {
@@ -281,13 +281,13 @@ function renderGrid() {
     Object.keys(stockData).forEach(key => {
         const item = stockData[key]; renderSlot(key, item);
     });
+    // Clear empty slots
     for(let i=1; i<=size; i++) { 
         if(!stockData[i]) { 
             const el = document.getElementById('stock-'+i); 
             if(el) { 
                 el.className='stock-item'; 
-                el.classList.remove('new-order');
-                el.classList.remove('blinking-border');
+                el.classList.remove('new-order', 'blinking-border');
                 document.getElementById(`status-${i}`).innerText='ว่าง'; 
                 document.getElementById(`price-${i}`).innerText=''; 
                 document.getElementById(`qbadge-${i}`).style.display='none'; 
@@ -304,25 +304,35 @@ function connectToStock(vid) {
     if (unsubscribeStock) unsubscribeStock();
     currentVideoId = vid; lastScrollTimestamp = Date.now();
     let isFirstLoad = true; 
+    let lastDataStr = "";
 
     unsubscribeStock = onValue(ref(db, `stock/${vid}`), snap => {
         const val = snap.val() || {};
         
+        // Detect Changes for Sound
         if (!isFirstLoad) {
-            const keys = Object.keys(val);
+            const keys = Object.keys({...val, ...stockData}); // All potential keys
             for (const key of keys) {
                 const newItem = val[key];
                 const oldItem = stockData[key];
-                
-                if (newItem.owner && (!oldItem || !oldItem.owner)) {
-                    setTimeout(() => {
+
+                // 1. New Booking (Was empty/null -> Has owner)
+                if (newItem?.owner && (!oldItem || !oldItem.owner)) {
+                     // Play local sound for immediate feedback on all connected devices
+                     playDing(); 
+                     // Scroll to item
+                     setTimeout(() => {
                         const el = document.getElementById('stock-' + key);
                         if (el) {
                             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                             el.classList.add('highlight');
                         }
                     }, 50);
-                    break;
+                }
+                
+                // 2. Cancellation (Was owned -> Empty/Null)
+                if ((!newItem || !newItem.owner) && oldItem?.owner) {
+                    playCancel();
                 }
             }
         }
@@ -347,13 +357,17 @@ function updateAwayTimer() {
     if (el) el.innerText = text;
 }
 
-// --- Audio ---
+// --- BROADCAST SYSTEM ---
+function broadcastMessage(msg) {
+    set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() });
+}
+
+// --- AUDIO FUNCTIONS (iOS Enhanced) ---
 function unlockAudio() {
-    if (isAudioUnlocked) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    synth.cancel();
-    const u = new SpeechSynthesisUtterance(" ");
-    synth.speak(u);
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+    // Create silent oscillator to force audio engine on
     const o = audioCtx.createOscillator();
     const g = audioCtx.createGain();
     g.gain.value = 0;
@@ -361,11 +375,24 @@ function unlockAudio() {
     g.connect(audioCtx.destination);
     o.start(0);
     o.stop(0.1);
+    
+    // Reset synth
+    synth.cancel();
     isAudioUnlocked = true;
+    console.log("Audio Force Unlocked");
 }
-['click', 'touchstart', 'keydown'].forEach(evt => document.addEventListener(evt, unlockAudio, { once: true }));
+// Listen to multiple interaction events for iOS
+['click', 'touchstart', 'touchend', 'keydown'].forEach(evt => {
+    window.addEventListener(evt, unlockAudio, { once: false }); // Retry often
+});
 
-function queueSpeech(txt) { if(!isSoundOn) return; speechQueue.push(txt); if (!isSpeaking) processQueue(); }
+function queueSpeech(txt) { 
+    if(!isSoundOn) return; 
+    // Force resume before speaking
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+    speechQueue.push(txt); 
+    if (!isSpeaking) processQueue(); 
+}
 
 function processQueue() {
     if (speechQueue.length === 0) { isSpeaking = false; return; }
@@ -382,12 +409,34 @@ function processQueue() {
     synth.speak(u);
 }
 
-function playDing() { if(!isSoundOn) return; const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.connect(g); g.connect(audioCtx.destination); o.frequency.setValueAtTime(800, audioCtx.currentTime); o.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime+0.1); g.gain.setValueAtTime(0.3, audioCtx.currentTime); g.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime+0.1); o.start(); o.stop(audioCtx.currentTime+0.1); }
-function playCancel() { if(!isSoundOn) return; const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.type='sawtooth'; o.connect(g); g.connect(audioCtx.destination); o.frequency.setValueAtTime(150, audioCtx.currentTime); g.gain.setValueAtTime(0.2, audioCtx.currentTime); o.start(); o.stop(audioCtx.currentTime+0.3); }
+function playDing() { 
+    if(!isSoundOn) return; 
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+    const o = audioCtx.createOscillator(); 
+    const g = audioCtx.createGain(); 
+    o.connect(g); g.connect(audioCtx.destination); 
+    o.frequency.setValueAtTime(800, audioCtx.currentTime); 
+    o.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime+0.1); 
+    g.gain.setValueAtTime(0.3, audioCtx.currentTime); 
+    g.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime+0.1); 
+    o.start(); o.stop(audioCtx.currentTime+0.1); 
+}
+
+function playCancel() { 
+    if(!isSoundOn) return; 
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+    const o = audioCtx.createOscillator(); 
+    const g = audioCtx.createGain(); 
+    o.type='sawtooth'; 
+    o.connect(g); g.connect(audioCtx.destination); 
+    o.frequency.setValueAtTime(150, audioCtx.currentTime); 
+    g.gain.setValueAtTime(0.2, audioCtx.currentTime); 
+    o.start(); o.stop(audioCtx.currentTime+0.3); 
+}
 setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
 // ============================================================
-// 4. WINDOW FUNCTIONS (Assignments)
+// 4. WINDOW FUNCTIONS
 // ============================================================
 window.forceUpdate = () => { if(confirm('ยืนยันการโหลดโปรแกรมใหม่?')) { localStorage.removeItem('app_version'); window.location.reload(true); } };
 window.toggleSound = () => { isSoundOn = !isSoundOn; const btn = document.getElementById('btnSound'); if (isSoundOn) { btn.className = 'btn btn-mute active'; btn.innerText = '🔊 เสียง: เปิด'; unlockAudio(); queueSpeech("เปิดเสียงค่ะ"); } else { btn.className = 'btn btn-mute'; btn.innerText = '🔇 เสียง: ปิด'; window.resetVoice(); } };
@@ -405,50 +454,10 @@ window.toggleDropdown = () => { document.getElementById("toolsDropdown").classLi
 window.askAiKey = () => { Swal.fire({ title: 'ตั้งค่า Gemini API Key', html: '<a href="https://aistudio.google.com/" target="_blank" style="color:#29b6f6">กดขอ Key ฟรีที่นี่</a>', input: 'text', inputValue: geminiApiKey, footer: geminiApiKey ? '<span style="color:lime">✅ มี Key อยู่ในเครื่องแล้ว</span>' : '' }).then(res => { if (res.value) { geminiApiKey = res.value.trim(); localStorage.setItem('geminiApiKey', geminiApiKey); Swal.fire('บันทึกแล้ว', '', 'success'); } }); };
 window.adjustZoom = (n) => { currentFontSize+=n; document.documentElement.style.setProperty('--chat-size', currentFontSize+'px'); };
 window.adjustGridZoom = (n) => { currentGridSize+=n; document.documentElement.style.setProperty('--grid-size', currentGridSize+'em'); };
-window.renderDashboardTable = () => { /* ... (Defined above, kept separately for readability but assigned to window) ... */ 
-    const dashboard = document.querySelector('.dashboard-overlay');
-    const scrollY = dashboard ? dashboard.scrollTop : 0; 
-    const tbody = document.getElementById('shipping-body'); 
-    if(tbody) {
-        tbody.innerHTML = '';
-        const userOrders = {};
-        const allBuyerUids = new Set();
-        Object.keys(stockData).forEach(num => {
-            const item = stockData[num]; 
-            if(item.uid) {
-                allBuyerUids.add(item.uid);
-                if (!userOrders[item.uid]) userOrders[item.uid] = { name: item.owner, items: [], totalPrice: 0, uid: item.uid };
-                const price = item.price ? parseInt(item.price) : 0;
-                userOrders[item.uid].items.push({ num: num, price: price });
-                userOrders[item.uid].totalPrice += price;
-            }
-        });
-        const currentShipping = shippingData[currentVideoId] || {};
-        const readyUids = [...allBuyerUids].filter(uid => currentShipping[uid] && currentShipping[uid].ready);
-        const notReadyUids = [...allBuyerUids].filter(uid => !(currentShipping[uid] && currentShipping[uid].ready));
-        if (notReadyUids.length > 0) {
-            const addRow = document.createElement('tr');
-            addRow.innerHTML = `<td colspan="3" style="text-align:center; padding:10px; background:#2a2a2a;"><div style="display:flex; gap:10px; justify-content:center; align-items:center;"><i class="fa-solid fa-user-plus"></i><select id="manualShipSelect" style="padding:5px; border-radius:4px; background:#444; color:#fff; border:1px solid #555; max-width:200px;"><option value="">-- เลือกลูกค้าเพื่อส่งของ --</option>${notReadyUids.map(uid => `<option value="${uid}">${savedNames[uid]?.nick || userOrders[uid].name}</option>`).join('')}</select><button class="btn btn-success" onclick="window.manualAddShipping()" style="padding:4px 10px; font-size:0.9em;">เพิ่ม</button></div></td>`;
-            tbody.appendChild(addRow);
-        } else if (allBuyerUids.size > 0 && readyUids.length === allBuyerUids.size) {
-             const infoRow = document.createElement('tr'); infoRow.innerHTML = `<td colspan="3" style="text-align:center; color:#00e676; padding:10px;">✅ ลูกค้าทุกคนอยู่ในรายการส่งของแล้ว</td>`; tbody.appendChild(infoRow);
-        }
-        if (readyUids.length === 0) {
-            const emptyRow = document.createElement('tr'); emptyRow.innerHTML = `<td colspan="3" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`; tbody.appendChild(emptyRow);
-        } else {
-            let index = 1;
-            readyUids.forEach(uid => {
-                const order = userOrders[uid];
-                let custData = savedNames[uid] || { nick: order.name };
-                const tr = document.createElement('tr');
-                const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
-                tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`;
-                tbody.appendChild(tr);
-            });
-        }
-        if(dashboard) dashboard.scrollTop = scrollY;
-    }
-};
+window.filterHistory = () => { historyCurrentPage = 1; window.renderHistoryPage(); };
+window.deleteHistory = (vid) => { Swal.fire({title:'ลบประวัติ?', showCancelButton:true}).then(r=>{ if(r.isConfirmed) remove(ref(db, 'history/'+vid)).then(() => window.loadHistoryList()); }); };
+window.toggleShowAll = () => { window.renderDashboardTable(); };
+
 window.handleStockClick = (num) => {
     const current = stockData[num];
     if (!current || !current.owner) {
@@ -481,19 +490,95 @@ window.handleStockClick = (num) => {
         Swal.fire({ title: `เบอร์ ${num}`, html: `<div style="font-size:1.2em; color:#00e676; margin-bottom:10px;">${current.owner}</div><div style="display:flex; gap:5px; justify-content:center; flex-wrap:wrap;"><button onclick="window.doAction(${num}, 'edit')" class="swal2-confirm swal2-styled" style="background:#1976d2; margin:0;">แก้ชื่อ</button> <button onclick="window.doAction(${num}, 'price')" class="swal2-confirm swal2-styled" style="background:#555; margin:0;">แก้ราคา</button> <button onclick="window.doAction(${num}, 'cancel')" class="swal2-confirm swal2-styled" style="background:#d32f2f; margin:0;">ยกเลิกจอง</button></div>${queueHtml}`, showConfirmButton: false }); 
     }
 };
-window.removeQueue = (num, idx) => { const current=stockData[num]; if(current&&current.queue){ const newQ=[...current.queue]; newQ.splice(idx,1); set(ref(db,`stock/${currentVideoId}/${num}/queue`),newQ).then(()=>{ Swal.close(); window.handleStockClick(num); }); } };
-window.moveQueueUp = (num, idx) => { if(idx===0)return; const current=stockData[num]; if(current&&current.queue){ const newQ=[...current.queue]; const temp=newQ[idx]; newQ[idx]=newQ[idx-1]; newQ[idx-1]=temp; set(ref(db,`stock/${currentVideoId}/${num}/queue`),newQ).then(()=>{ Swal.close(); window.handleStockClick(num); }); } };
-window.editQueueName = (num, idx) => { const current=stockData[num]; if(current&&current.queue){ Swal.fire({title:'แก้ไขชื่อในคิว',input:'text',inputValue:current.queue[idx].owner,showCancelButton:true}).then(r=>{if(r.value){const updates={}; updates[`stock/${currentVideoId}/${num}/queue/${idx}/owner`]=r.value; update(ref(db),updates).then(()=>{Swal.close(); window.handleStockClick(num);});}}); } };
-window.doAction = (num, action) => { Swal.close(); if(action==='edit'){Swal.fire({input:'text',inputValue:stockData[num].owner,title:'แก้ไขชื่อ (เฉพาะรายการนี้)'}).then(r=>{if(r.value)update(ref(db,`stock/${currentVideoId}/${num}`),{owner:r.value});});}else if(action==='price'){Swal.fire({input:'number'}).then(r=>{if(r.value)update(ref(db,`stock/${currentVideoId}/${num}`),{price:r.value});});}else if(action==='cancel')processCancel(num,`แอดมินลบรายการที่ ${num} ค่ะ`); };
-window.fixDatabase = async () => { /* Same as before */ };
-window.clearAllStock = () => { Swal.fire({title:'ล้างทั้งหมด?',showCancelButton:true}).then(r=>{if(r.isConfirmed)remove(ref(db,`stock/${currentVideoId}`));}); };
-window.toggleAICommander = () => { if(!geminiApiKey)return Swal.fire({icon:'warning',title:'ต้องใส่ API Key ก่อน'}); isAiCommander=!isAiCommander; const btn=document.getElementById('btnAICommander'); if(isAiCommander){btn.innerHTML='🤖 AI: เปิด (Commander)';btn.className='btn btn-ai active';queueSpeech("เปิดระบบเอไอคอมมานเดอร์");}else{btn.innerHTML='🤖 AI: ปิด';btn.className='btn btn-ai inactive';} };
-window.openTestMenu = () => { Swal.fire({title:'เครื่องมือ',showDenyButton:true,confirmButtonText:isSimulating?'🛑 หยุดจำลอง':'⚡ จำลองแชท',denyButtonText:'🔑 ตั้งค่า API Key'}).then(r=>{if(r.isConfirmed)window.toggleSimulation();else if(r.isDenied)window.askAiKey();}); };
-window.toggleSimulation = () => { isSimulating=!isSimulating; const menu=document.getElementById('menuSim'); if(isSimulating){ menu.innerText="🛑 หยุดจำลอง"; const size=parseInt(document.getElementById('stockSize').value); simIntervalId=setInterval(()=>{ const rNum=Math.floor(Math.random()*size)+1; processMessage({id:'sim-'+Date.now(),snippet:{displayMessage:`F${rNum}`},authorDetails:{channelId:'sim',displayName:'SimUser',profileImageUrl:''}}); },1500); }else{ menu.innerText="⚡ เริ่มจำลองแชท"; clearInterval(simIntervalId); } };
-window.openHistory = () => { document.getElementById('history-modal').style.display='flex'; window.loadHistoryList(); };
-window.closeHistory = () => { document.getElementById('history-modal').style.display='none'; };
-window.changeHistoryPage = (delta) => { historyCurrentPage+=delta; window.renderHistoryPage(); };
-window.renderHistoryPage = () => { /* ... (Defined above) ... */ 
+
+window.doAction = (num, action) => {
+    Swal.close();
+    if (action === 'edit') { Swal.fire({input: 'text', inputValue: stockData[num].owner, title: 'แก้ไขชื่อ (เฉพาะรายการนี้)'}).then(r => { if (r.value) { update(ref(db, `stock/${currentVideoId}/${num}`), {owner: r.value}); } }); } 
+    else if (action === 'price') Swal.fire({input: 'number'}).then(r => { if(r.value) update(ref(db, `stock/${currentVideoId}/${num}`), {price: r.value}); });
+    else if (action === 'cancel') {
+        const nick = stockData[num].owner || 'ลูกค้า';
+        const msg = `${nick} ยกเลิกรายการที่ ${num} ค่ะ`;
+        processCancel(num, msg); 
+        broadcastMessage(msg); // Broadcast manual cancel
+    }
+};
+
+window.removeQueue = (num, idx) => {
+    const current = stockData[num];
+    if (current && current.queue) {
+        const newQ = [...current.queue]; newQ.splice(idx, 1);
+        set(ref(db, `stock/${currentVideoId}/${num}/queue`), newQ).then(() => { Swal.close(); window.handleStockClick(num); });
+    }
+};
+
+window.moveQueueUp = (num, idx) => {
+    if (idx === 0) return; 
+    const current = stockData[num];
+    if (current && current.queue) {
+        const newQ = [...current.queue]; const temp = newQ[idx]; newQ[idx] = newQ[idx-1]; newQ[idx-1] = temp;
+        set(ref(db, `stock/${currentVideoId}/${num}/queue`), newQ).then(() => { Swal.close(); window.handleStockClick(num); });
+    }
+};
+
+window.editQueueName = (num, idx) => {
+    const current = stockData[num];
+    if (current && current.queue) {
+        Swal.fire({title: 'แก้ไขชื่อในคิว', input: 'text', inputValue: current.queue[idx].owner, showCancelButton: true}).then((result) => {
+            if (result.value) {
+                const updates = {}; updates[`stock/${currentVideoId}/${num}/queue/${idx}/owner`] = result.value;
+                update(ref(db), updates).then(() => { Swal.close(); window.handleStockClick(num); });
+            }
+        });
+    }
+};
+
+window.clearAllStock = () => { 
+    Swal.fire({title: 'ล้างทั้งหมด?', showCancelButton: true}).then(r => { if(r.isConfirmed) remove(ref(db, `stock/${currentVideoId}`)); }); 
+};
+
+window.openTestMenu = () => {
+    Swal.fire({ title: 'เครื่องมือ', showDenyButton: true, confirmButtonText: isSimulating ? '🛑 หยุดจำลอง' : '⚡ จำลองแชท', denyButtonText: '🔑 ตั้งค่า API Key' }).then(r => {
+        if (r.isConfirmed) window.toggleSimulation();
+        else if (r.isDenied) window.askAiKey();
+    });
+};
+
+window.toggleSimulation = () => {
+    isSimulating = !isSimulating; const menu = document.getElementById('menuSim');
+    if (isSimulating) {
+        menu.innerText = "🛑 หยุดจำลอง";
+        const size = parseInt(document.getElementById('stockSize').value);
+        simIntervalId = setInterval(() => {
+            const rNum = Math.floor(Math.random()*size)+1;
+            processMessage({ id: 'sim-'+Date.now(), snippet: { displayMessage: `F${rNum}` }, authorDetails: { channelId: 'sim', displayName: 'SimUser', profileImageUrl: '' } });
+        }, 1500);
+    } else { menu.innerText = "⚡ เริ่มจำลองแชท"; clearInterval(simIntervalId); }
+};
+
+window.openHistory = () => { 
+    document.getElementById('history-modal').style.display = 'flex'; 
+    window.loadHistoryList(); 
+};
+window.closeHistory = () => { document.getElementById('history-modal').style.display = 'none'; };
+window.changeHistoryPage = (delta) => { historyCurrentPage += delta; window.renderHistoryPage(); };
+
+window.toggleAwayMode = async () => {
+    try {
+        unlockAudio();
+        const snap = await get(ref(db, 'system/awayMode'));
+        const current = snap.val() || {};
+        if (current.isAway) {
+            await update(ref(db, 'system/awayMode'), { isAway: false });
+        } else {
+            await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() });
+            await set(ref(db, 'system/aiCommander'), myDeviceId);
+        }
+    } catch(e) {
+        console.error("Away Mode Error", e);
+    }
+};
+
+window.renderHistoryPage = () => {
     const list = document.getElementById('history-list');
     list.innerHTML = '';
     const searchText = document.getElementById('historySearchInput').value.toLowerCase();
@@ -503,34 +588,30 @@ window.renderHistoryPage = () => { /* ... (Defined above) ... */
     const start = (historyCurrentPage - 1) * historyItemsPerPage;
     const end = start + historyItemsPerPage;
     const pageItems = filtered.slice(start, end);
+
     const controls = document.createElement('li');
     controls.style.cssText = "display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; background:#1e1e1e; padding:10px; border-bottom:1px solid #333; z-index:10; margin-bottom:10px;";
     controls.innerHTML = `<button class="btn btn-dark" ${historyCurrentPage<=1?'disabled':''} onclick="window.changeHistoryPage(-1)">◀ ย้อน</button><span style="color:#aaa; font-size:0.9em;">หน้า ${historyCurrentPage} / ${totalPages || 1} (ทั้งหมด ${filtered.length})</span><button class="btn btn-dark" ${historyCurrentPage>=totalPages?'disabled':''} onclick="window.changeHistoryPage(1)">ถัดไป ▶</button>`;
     list.appendChild(controls);
+
     if(pageItems.length === 0) { const empty = document.createElement('li'); empty.innerHTML = `<div style="text-align:center; padding:20px; color:#555;">ไม่พบรายการ</div>`; list.appendChild(empty); return; }
     pageItems.forEach(i => { const li = document.createElement('li'); li.className = 'history-item'; li.innerHTML = `<div><span class="hist-date">${formatThaiDate(i.timestamp||0)}</span> ${i.title||i.id}</div> <button class="btn btn-dark" onclick="window.deleteHistory('${i.id}')">🗑️</button>`; li.querySelector('div').onclick = () => { window.closeHistory(); document.getElementById('vidInput').value = i.id; window.toggleConnection(); }; list.appendChild(li); });
 };
-window.deleteHistory = (vid) => { Swal.fire({title:'ลบประวัติ?', showCancelButton:true}).then(r=>{ if(r.isConfirmed) remove(ref(db, 'history/'+vid)).then(() => window.loadHistoryList()); }); };
-window.toggleShowAll = () => { window.renderDashboardTable(); };
-window.toggleAwayMode = async () => { try { unlockAudio(); const snap = await get(ref(db, 'system/awayMode')); const current = snap.val() || {}; if (current.isAway) { await update(ref(db, 'system/awayMode'), { isAway: false }); } else { await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() }); await set(ref(db, 'system/aiCommander'), myDeviceId); } } catch(e) { console.error("Away Mode Error", e); } };
-window.toggleConnection = () => { /* ... (Defined above) ... */ 
-    if (isConnected) {
-        clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false;
-        document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary";
-        document.getElementById('status-dot').className = "status-dot"; queueSpeech("หยุดการเชื่อมต่อ"); 
-        chatToken = ''; return;
+
+window.loadHistoryList = async () => {
+    const list = document.getElementById('history-list');
+    list.innerHTML = '<li style="text-align:center; color:#888;">กำลังโหลดประวัติ...</li>';
+    try {
+        const snapshot = await get(ref(db, 'history'));
+        const items = [];
+        snapshot.forEach(c => items.push({ id: c.key, ...c.val() }));
+        items.sort((a,b) => (b.timestamp||0)-(a.timestamp||0));
+        allHistoryData = items;
+        historyCurrentPage = 1;
+        window.renderHistoryPage();
+    } catch(e) {
+        list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
     }
-    const vid = document.getElementById('vidInput').value.trim();
-    if (!vid) return Swal.fire('Error', 'ใส่ Video ID ก่อน', 'error');
-    isConnecting = true; setLoading(true); if (audioCtx.state === 'suspended') audioCtx.resume();
-    currentVideoId = vid; connectToStock(vid); set(ref(db, 'system/activeVideo'), vid); 
-    chatToken = '';
-    connectYoutube(vid).catch(e => { 
-        Swal.fire({ icon: 'info', title: 'เชื่อมต่อวิดีโอแล้ว', text: 'ไม่พบห้องแชทสด (อาจเป็นคลิปย้อนหลัง) ระบบจะทำงานในโหมดรับคำสั่งเสียง/กดเองเท่านั้น', timer: 3000 });
-        isConnected = true; setLoading(false); isConnecting = false;
-        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
-        document.getElementById('status-dot').className = "status-dot online";
-    });
 };
 
 async function connectYoutube(vid) {
@@ -586,133 +667,6 @@ async function updateViewerCount(vid) {
         if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 180000); }
         if (d.items?.[0]) document.getElementById('view-counter').innerText = "👁️ " + Number(d.items[0].liveStreamingDetails.concurrentViewers||0).toLocaleString();
     } catch (e) { console.error("Viewer Count Error:", e); }
-}
-
-async function processMessage(item) {
-    if (!item.snippet || !item.authorDetails) return; 
-    if (seenMessageIds[item.id]) return; seenMessageIds[item.id] = true;
-    const msg = item.snippet.displayMessage || ""; if (!msg) return;
-
-    const uid = item.authorDetails.channelId; 
-    const realName = item.authorDetails.displayName;
-    let nick = realName; if(savedNames[uid]) nick = (typeof savedNames[uid] === 'object') ? savedNames[uid].nick : savedNames[uid];
-    const isAdmin = /admin|แอดมิน/i.test(nick);
-    
-    let stockSize = parseInt(document.getElementById('stockSize').value) || 70;
-    let intent = null, targetId = null, targetPrice = null, method = null;
-
-    if (isAiCommander) {
-        const aiResult = await analyzeChatWithAI(msg);
-        if (aiResult) {
-            if (aiResult.intent === 'buy' && aiResult.id) {
-                intent = 'buy'; targetId = aiResult.id; targetPrice = aiResult.price; method = 'ai';
-            } else if (aiResult.intent === 'cancel' && aiResult.id) {
-                intent = 'cancel'; targetId = aiResult.id; method = 'ai';
-            } else if (aiResult.intent === 'shipping') {
-                const shipPath = `shipping/${currentVideoId}/${uid}`;
-                update(ref(db, shipPath), {ready: true, timestamp: Date.now()}).then(() => queueSpeech(nick + " แจ้งส่งของ"));
-                method = 'ai';
-            } else if (aiResult.intent === 'question') {
-                method = 'ai-skip';
-            }
-        }
-    }
-
-    if (!method) {
-        const buyRegex = /(?:^|[\s])(?:F|f|cf|CF|รับ|เอา)?\s*(\d+)(?:[\s=\/]+(\d+))?(?:$|[\s])/; 
-        const cancelRegex = /(?:^|[\s])(?:cc|CC|cancel|ยกเลิก|ไม่เอา|ปล่อย|หลุด)\s*(\d+)(?:$|[\s])/i;
-        const isQuestion = /อก|เอว|ยาว|ราคา|เท่าไหร่|ทไหร|กี่บาท|แบบไหน|ผ้า|สี|ตำหนิ|ไหม/i.test(msg);
-        const cMatch = msg.match(cancelRegex);
-        const bMatch = msg.match(buyRegex);
-
-        if (cMatch) { 
-            intent = 'cancel'; targetId = parseInt(cMatch[1]); method = 'regex';
-        } else if (bMatch && !isQuestion) { 
-            intent = 'buy'; targetId = parseInt(bMatch[1]); targetPrice = bMatch[2] ? parseInt(bMatch[2]) : null; method = 'regex';
-        }
-    }
-
-    renderChat(nick, msg, isAdmin ? 'admin' : 'normal', uid, item.authorDetails.profileImageUrl, realName, method);
-    
-    let speakMsg = msg.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '');
-    if (speakMsg.trim().length > 0 && speakMsg.length < 100) queueSpeech(nick + " ... " + speakMsg);
-
-    if (method === 'ai-skip') return; 
-
-    if (targetId && targetId > 0) {
-        if (targetId > stockSize) {
-            stockSize = targetId;
-            window.saveStockSize(stockSize);
-        }
-
-        if (intent === 'buy') {
-            let ownerName = nick, ownerUid = uid;
-            if (isAdmin) {
-                let cleanName = msg;
-                cleanName = cleanName.replace(targetId.toString(), '').replace(/f|cf|รับ|เอา|=/gi, '');
-                if (targetPrice) cleanName = cleanName.replace(targetPrice.toString(), '');
-                cleanName = cleanName.replace(/^[:=\-\s]+|[:=\-\s]+$/g, '').trim();
-                if (cleanName.length > 0) { ownerName = cleanName; ownerUid = 'admin-proxy-' + Date.now(); } 
-                else { ownerName = "ลูกค้า (Admin)"; ownerUid = 'admin-proxy-' + Date.now(); }
-            }
-            await processOrder(targetId, ownerName, ownerUid, 'chat', targetPrice, method); 
-        } else if (intent === 'cancel') {
-            if (isAdmin || (stockData[targetId] && stockData[targetId].uid === uid)) {
-                const cancelMsg = `${nick} ยกเลิกรายการที่ ${targetId} ค่ะ`;
-                processCancel(targetId, cancelMsg);
-            }
-        }
-    }
-}
-
-async function processOrder(num, owner, uid, src, price, method = 'manual') {
-    const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
-    try {
-        await runTransaction(itemRef, (currentData) => {
-            if (currentData === null) {
-                return { owner, uid, time: Date.now(), queue: [], source: method, price: price || null };
-            } else if (!currentData.owner) {
-                currentData.owner = owner;
-                currentData.uid = uid;
-                currentData.time = Date.now();
-                currentData.source = method;
-                if(price) currentData.price = price;
-                if(!currentData.queue) currentData.queue = [];
-                return currentData;
-            } else {
-                if (currentData.owner === owner) return; 
-                const queue = currentData.queue || [];
-                if (queue.find(q => q.owner === owner)) return; 
-                queue.push({ owner, uid, time: Date.now() });
-                currentData.queue = queue;
-                return currentData;
-            }
-        });
-        const current = stockData[num];
-        if (current && current.owner === owner) playDing();
-    } catch (e) {
-        console.error("Transaction failed: ", e);
-    }
-}
-
-function processCancel(num, reason) {
-    if (!stockData[num]) return;
-    const current = stockData[num];
-    if (current.queue && Array.isArray(current.queue) && current.queue.length > 0) {
-        const next = current.queue[0];
-        const nextQ = current.queue.slice(1);
-        const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
-        if (current.price) newData.price = current.price;
-        set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
-            if (reason) queueSpeech(reason);
-            setTimeout(() => queueSpeech(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
-        });
-    } else {
-        remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { 
-            playCancel(); 
-            if(reason) queueSpeech(reason); 
-        });
-    }
 }
 
 // ============================================================
@@ -781,6 +735,14 @@ onAuthStateChanged(auth, user => {
                 if (banner) banner.style.display = 'none';
                 if (awayInterval) { clearInterval(awayInterval); awayInterval = null; }
             }
+        });
+
+        // Broadcast Listener
+        onValue(ref(db, 'system/broadcast'), (snap) => {
+           const val = snap.val();
+           if(val && val.time > Date.now() - 10000 && val.text) { // Speak only recent (10s window)
+               queueSpeech(val.text);
+           }
         });
     }
 });
