@@ -1,10 +1,9 @@
 export const AppInfo = {
-    version: "v2.0.4",
+    version: "v2.0.5",
     releaseDate: "13/12/2025",
     changelog: [
-        "🚑 Hotfix: แก้ไขปุ่มกดจองไม่ทำงาน (Script Crash)",
-        "🐛 Fix: แก้ไขรายการจองเก่าไม่แสดงผล",
-        "🔄 System: จัดลำดับการทำงานโค้ดใหม่ (Hoisting Fix) ป้องกัน Error 100%",
-        "✨ UI: เพิ่มความเสถียรของหน้าจอ Dashboard"
+        "📱 Fix: แก้ไขเอฟเฟคไฮไลท์ (สีทอง) ไม่แสดงผลบน iPad/iPhone",
+        "🎨 UI: เพิ่ม Webkit Animation Support สำหรับอุปกรณ์ iOS",
+        "⚡ Performance: เพิ่ม Hardware Acceleration ให้กล่องสินค้าแสดงผลลื่นขึ้น"
     ]
 };
