@@ -1,3 +1,4 @@
+// Version: v2.1.9 | แก้ไข: แก้เสียงพูดซ้ำ 2 รอบ, ลบเสียงเอฟเฟคซ้อน, รวมศูนย์ Broadcast
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import { getDatabase, ref, set, update, remove, onValue, get, serverTimestamp, query, orderByChild, runTransaction } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
@@ -275,8 +276,7 @@ async function processOrder(num, owner, uid, src, price, method = 'manual') {
                 return currentData;
             }
         });
-        const current = stockData[num];
-        if (current && current.owner === owner) playDing();
+        // Remove playDing() here, handled by listener to prevent duplicates
     } catch (e) { console.error("Transaction failed: ", e); }
 }
 
@@ -289,13 +289,13 @@ function processCancel(num, reason) {
         const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
         if (current.price) newData.price = current.price;
         set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
-            if (reason) queueSpeech(reason);
-            setTimeout(() => queueSpeech(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
+            if (reason) broadcastMessage(reason); // Use Broadcast
+            setTimeout(() => broadcastMessage(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500); // Use Broadcast
         });
     } else {
         remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { 
-            playCancel(); 
-            if(reason) queueSpeech(reason); 
+            // remove playCancel(), handled by listener
+            if(reason) broadcastMessage(reason); // Use Broadcast
         });
     }
 }
@@ -382,7 +382,7 @@ function connectToStock(vid) {
                 const newItem = val[key];
                 const oldItem = stockData[key];
                 if (newItem?.owner && (!oldItem || !oldItem.owner)) {
-                     playDing(); 
+                     playDing(); // Plays sound on all devices (listener)
                      setTimeout(() => {
                         const el = document.getElementById('stock-' + key);
                         if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('highlight'); }
@@ -517,53 +517,6 @@ async function smartFetch(url) {
     } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
 }
 
-async function loadChat() {
-    if (!isConnected || !activeChatId) return; if (isSimulating) return;
-    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
-    try {
-        const data = await smartFetch(url);
-        if (data.items) { 
-            updateStatusIcon('stat-chat', 'ok'); 
-            for (const item of data.items) { await processMessage(item); }
-        }
-        // Critical Fix: Always update token if present, even if no items
-        if (data.nextPageToken) {
-            chatToken = data.nextPageToken; 
-        }
-        const delay = data.pollingIntervalMillis || 5000; chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
-    } catch(e) { updateStatusIcon('stat-chat', 'err'); chatTimeoutId = setTimeout(loadChat, 10000); }
-}
-
-async function updateViewerCount(vid) {
-    try {
-        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${vid}`);
-        if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 180000); }
-        if (d.items?.[0]) document.getElementById('view-counter').innerText = "👁️ " + Number(d.items[0].liveStreamingDetails.concurrentViewers||0).toLocaleString();
-    } catch (e) { console.error("Viewer Count Error:", e); }
-}
-
-async function connectYoutube(vid) {
-    try {
-        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${vid}`);
-        if (!d.items || d.items.length === 0) throw new Error("ID ไม่ถูกต้อง");
-        const item = d.items[0];
-        document.getElementById('live-title').innerText = item.snippet.title;
-        saveHistory(vid, item.snippet.title);
-        queueSpeech("เชื่อมต่อสำเร็จ กำลังอ่านคอมเมนต์จาก " + item.snippet.title);
-        isConnected = true; setLoading(false); isConnecting = false;
-        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
-        updateStatusIcon('stat-api', 'ok');
-        if (item.liveStreamingDetails?.activeLiveChatId) {
-            activeChatId = item.liveStreamingDetails.activeLiveChatId; chatToken = ''; loadChat(); updateViewerCount(vid); viewerIntervalId = setInterval(()=>updateViewerCount(vid), 15000);
-        } else { activeChatId = null; throw new Error("No Live Chat"); }
-    } catch(e) { 
-        console.error(e); 
-        isConnected = true; setLoading(false); isConnecting = false; 
-        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark"; 
-        updateStatusIcon('stat-api', 'err'); 
-    }
-}
-
 // ============================================================
 // 4. WINDOW EXPORTS
 // ============================================================
@@ -580,7 +533,20 @@ window.saveStockSize = (val) => { set(ref(db, 'system/stockSize'), parseInt(val)
 window.updateNickSilent = (uid, val) => { if(!val) return; update(ref(db, `nicknames/${uid}`), {nick: val}); };
 window.printLabel = (uid) => { let total=0, items=[]; Object.keys(stockData).forEach(n=>{ if(stockData[n].uid===uid) { items.push(`#${n} ${stockData[n].price?stockData[n].price:''}`); total+=parseInt(stockData[n].price||0); } }); let address = ""; if (shippingData[currentVideoId] && shippingData[currentVideoId][uid]) { address = shippingData[currentVideoId][uid].address || ""; } else if (savedNames[uid]) { address = savedNames[uid].address || ""; } document.getElementById('print-area').innerHTML = `<div class="print-label"><div class="print-header">ผู้รับ: ${savedNames[uid]?.nick||'ลูกค้า'}</div><div class="print-address">${address}</div><div class="print-items">${items.join(', ')}<br>รวม: ${total} บาท</div></div>`; window.print(); };
 window.toggleFullScreen = () => { if (!document.fullscreenElement && !document.webkitFullscreenElement) { if (document.documentElement.requestFullscreen) { document.documentElement.requestFullscreen(); } else if (document.documentElement.webkitRequestFullscreen) { document.documentElement.webkitRequestFullscreen(); } } else { if (document.exitFullscreen) { document.exitFullscreen(); } else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); } } };
-window.toggleDropdown = () => { document.getElementById("toolsDropdown").classList.toggle("show"); };
+window.toggleDropdown = (event) => { 
+    if(event) event.stopPropagation();
+    document.getElementById("toolsDropdown").classList.toggle("show"); 
+};
+window.addEventListener('click', (e) => {
+    if (!e.target.closest('.btn-sim')) {
+        const dropdowns = document.getElementsByClassName("dropdown-content");
+        for (let i = 0; i < dropdowns.length; i++) {
+            const openDropdown = dropdowns[i];
+            if (openDropdown.classList.contains('show')) openDropdown.classList.remove('show');
+        }
+    }
+});
+
 window.askAiKey = () => { Swal.fire({ title: 'ตั้งค่า Gemini API Key', html: '<a href="https://aistudio.google.com/" target="_blank" style="color:#29b6f6">กดขอ Key ฟรีที่นี่</a>', input: 'text', inputValue: geminiApiKey, footer: geminiApiKey ? '<span style="color:lime">✅ มี Key อยู่ในเครื่องแล้ว</span>' : '' }).then(res => { if (res.value) { geminiApiKey = res.value.trim(); localStorage.setItem('geminiApiKey', geminiApiKey); Swal.fire('บันทึกแล้ว', '', 'success'); } }); };
 window.adjustZoom = (n) => { currentFontSize+=n; document.documentElement.style.setProperty('--chat-size', currentFontSize+'px'); };
 window.adjustGridZoom = (n) => { currentGridSize+=n; document.documentElement.style.setProperty('--grid-size', currentGridSize+'em'); };
@@ -668,18 +634,6 @@ window.loadHistoryList = async () => {
         list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
     }
 };
-window.scrollToBottom = () => {
-    const vp = document.getElementById('chat-viewport');
-    if (vp) {
-        // Force scroll with timeout to allow UI update
-        setTimeout(() => {
-            vp.scrollTop = vp.scrollHeight;
-            isUserScrolledUp = false;
-            const btn = document.getElementById('btn-scroll-down');
-            if(btn) btn.style.display = 'none';
-        }, 50);
-    }
-};
 
 window.handleStockClick = (num) => {
     const current = stockData[num];
@@ -725,7 +679,7 @@ window.doAction = (num, action) => {
         const nick = stockData[num].owner || 'ลูกค้า';
         const msg = `${nick} ยกเลิกรายการที่ ${num} ค่ะ`;
         processCancel(num, msg); 
-        broadcastMessage(msg); 
+        // broadcastMessage(msg); // Removed manual broadcast here, handled by processCancel now
         Toast.fire({icon: 'success', title: 'ยกเลิกรายการสำเร็จ'});
     }
 };
@@ -840,7 +794,9 @@ onAuthStateChanged(auth, user => {
             } else if (!newState && currentAwayState) {
                  queueSpeech("ลูกหลับแล้ว แอดมินสแตนบาย");
             }
+            
             currentAwayState = newState;
+
             if (currentAwayState) {
                 if (banner) banner.style.display = 'flex';
                 awayStartTime = val?.startTime || Date.now(); 
