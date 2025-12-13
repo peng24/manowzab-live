@@ -45,7 +45,7 @@ let speechQueue = [];
 let isSpeaking = false;
 let isSoundOn = true;
 let activeUtterance = null;
-let isAudioUnlocked = false; // Track audio state
+let isAudioUnlocked = false;
 
 // Away Mode
 let isAway = false;
@@ -858,14 +858,16 @@ window.toggleShowAll = () => {
     window.renderDashboardTable();
 };
 
-// --- 7. STARTUP LOGIC ---
+// --- INIT LISTENERS ---
 signInAnonymously(auth);
 remove(ref(db, 'stock/demo'));
 
 onAuthStateChanged(auth, user => {
     if (user) {
         initTooltips(); 
-        initStatusIcons(); // Inject icons
+        initStatusIcons(); 
+        initVersionControl();
+        
         onValue(ref(db, 'system/stockSize'), s => { 
             const val = s.val() || 70;
             document.getElementById('stockSize').value = val;
@@ -931,12 +933,10 @@ onAuthStateChanged(auth, user => {
 
         // AI Commander Sync
         syncAiCommanderStatus();
-        initVersionControl();
     }
 });
 
 function initStatusIcons() {
-    // Inject FontAwesome Icons into status cluster
     const cluster = document.querySelector('.status-cluster');
     if(cluster) {
         cluster.innerHTML = `
