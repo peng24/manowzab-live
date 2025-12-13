@@ -4,7 +4,7 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gsta
 import { AppInfo } from "./version.js";
 
 // ============================================================
-// 1. CONFIGURATION & STATE (MUST BE FIRST)
+// 1. CONFIGURATION
 // ============================================================
 const firebaseConfig = {
     apiKey: "AIzaSyAVYqEmdw-AwS1tCElhSaXDLP1Aq35chp0",
@@ -15,7 +15,9 @@ const firebaseConfig = {
 
 const API_KEYS = ["AIzaSyAVzYQN51V-kITnyJWGy8IVSktitxrVD8g", "AIzaSyBlnw6tpETYu61XSNqd7zXt25Fv_vmbWJU", "AIzaSyAX3dwUqBFeCBjjZixVnlcBz56gAfNWzs0", "AIzaSyAxjRAs01mpt-NxQiR3yStr6Q-57EiQq64"];
 
-// --- GLOBAL VARIABLES ---
+// ============================================================
+// 2. GLOBAL VARIABLES
+// ============================================================
 let currentKeyIdx = 0;
 let isConnected = false;
 let isConnecting = false;
@@ -30,16 +32,12 @@ let savedNames = {};
 let shippingData = {};
 let seenMessageIds = {};
 
-// Timers
 let intervalId, viewerIntervalId, simIntervalId, autoDisconnectTimer, chatTimeoutId, awayInterval;
-
-// Chat & Scroll
 let activeChatId = '';
 let chatToken = '';
-let lastScrollTimestamp = 0; // Fixed definition position
+let lastScrollTimestamp = 0; 
 let unsubscribeStock, unsubscribeSystem;
 
-// UI
 let currentFontSize = 16;
 let currentGridSize = 1;
 let isUserScrolledUp = false;
@@ -68,75 +66,39 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
-// Check Version & Auto-Reload
+// Check Version
 const localVer = localStorage.getItem('app_version');
 if (localVer !== AppInfo.version) {
-    console.log(`System Upgrade: ${localVer} -> ${AppInfo.version}`);
+    console.log(`Version update: ${localVer} -> ${AppInfo.version}`);
     localStorage.setItem('app_version', AppInfo.version);
     window.location.reload(true);
 }
 
 // SWAL Config
-const ModalSwal = Swal.mixin({ heightAuto: false, scrollbarPadding: false });
+const ModalSwal = Swal.mixin({
+    heightAuto: false,
+    scrollbarPadding: false
+});
 window.Swal = ModalSwal;
 
 const Toast = Swal.mixin({
-    toast: true, position: 'top', showConfirmButton: false, timer: 3000, timerProgressBar: true, heightAuto: false,
-    didOpen: (toast) => { toast.addEventListener('mouseenter', Swal.stopTimer); toast.addEventListener('mouseleave', Swal.resumeTimer); }
+    toast: true,
+    position: 'top', 
+    showConfirmButton: false,
+    timer: 3000,
+    timerProgressBar: true,
+    heightAuto: false,
+    didOpen: (toast) => {
+        toast.addEventListener('mouseenter', Swal.stopTimer)
+        toast.addEventListener('mouseleave', Swal.resumeTimer)
+    }
 });
 
 // ============================================================
-// 2. HELPER FUNCTIONS (DEPENDENCY LEVEL 0)
+// 3. ALL FUNCTIONS (Strict Order)
 // ============================================================
-function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
-function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
-function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
 
-function updateStatusIcon(id, status) { 
-    const el = document.getElementById(id);
-    if(el) { el.className = 'status-item'; el.classList.add(status); }
-}
-
-function updateKeyDisplay() { 
-    const el = document.getElementById('stat-key');
-    if(el) el.innerHTML = `<i class="fa-solid fa-key"></i> ${currentKeyIdx + 1}`; 
-}
-
-function setLoading(s) { 
-    const btn = document.getElementById('btnConnect');
-    if(btn) btn.disabled = s; 
-}
-
-function saveHistory(vid, title) { 
-    if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); 
-}
-
-function updateAwayTimer() {
-    if (!currentAwayState) return;
-    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
-    const minutes = Math.floor(diff / 60);
-    const seconds = diff % 60;
-    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    const el = document.getElementById('awayTimer');
-    if (el) el.innerText = text;
-}
-
-function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
-
-function generateNameHtml(uid, realName) {
-    const color = stringToColor(uid); 
-    let nick = realName;
-    let displayName = realName;
-    let isNickSet = false;
-    if (savedNames[uid]) { if (typeof savedNames[uid] === 'object') { nick = savedNames[uid].nick; } else { nick = savedNames[uid]; } isNickSet = true; displayName = nick; }
-    const valueToEdit = isNickSet ? nick : realName;
-    let vipClass = "";
-    if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
-    if (isNickSet) { return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`; }
-    return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
-}
-
-// --- AUDIO HELPERS ---
+// --- Audio ---
 function initAudio() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -148,19 +110,16 @@ function unlockAudio() {
     if (isAudioUnlocked) return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
     synth.cancel();
-    // Silent play to force iOS Audio Wakeup
-    const buffer = audioCtx.createBuffer(1, 1, 22050);
-    const source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioCtx.destination);
-    source.start(0);
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    g.gain.value = 0;
+    o.connect(g);
+    g.connect(audioCtx.destination);
+    o.start(0);
+    o.stop(0.1);
     isAudioUnlocked = true;
-    console.log("🔊 Audio Unlocked");
 }
-// Attach to multiple events for iPad/iPhone
-['click', 'touchstart', 'touchend', 'keydown'].forEach(evt => {
-    document.addEventListener(evt, unlockAudio, { once: false });
-});
+['click', 'touchstart', 'keydown'].forEach(evt => document.addEventListener(evt, unlockAudio, { once: false }));
 
 function queueSpeech(txt) { 
     if(!isSoundOn) return; 
@@ -213,9 +172,39 @@ function playCancel() {
     g.gain.setValueAtTime(0.2, audioCtx.currentTime); 
     o.start(); o.stop(audioCtx.currentTime+0.3); 
 }
-setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
-// --- INIT HELPERS ---
+// --- Helpers ---
+function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
+function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
+function updateStatusIcon(id, status) { const el = document.getElementById(id); if(el) { el.className = 'status-item'; el.classList.add(status); } }
+function updateKeyDisplay() { const el = document.getElementById('stat-key'); if(el) el.innerHTML = `<i class="fa-solid fa-key"></i> ${currentKeyIdx + 1}`; }
+function setLoading(s) { const btn = document.getElementById('btnConnect'); if(btn) btn.disabled = s; }
+function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
+function saveHistory(vid, title) { if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); }
+function updateAwayTimer() {
+    if (!currentAwayState) return;
+    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
+    const minutes = Math.floor(diff / 60);
+    const seconds = diff % 60;
+    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const el = document.getElementById('awayTimer');
+    if (el) el.innerText = text;
+}
+function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
+
+function generateNameHtml(uid, realName) {
+    const color = stringToColor(uid); 
+    let nick = realName;
+    let displayName = realName;
+    let isNickSet = false;
+    if (savedNames[uid]) { if (typeof savedNames[uid] === 'object') { nick = savedNames[uid].nick; } else { nick = savedNames[uid]; } isNickSet = true; displayName = nick; }
+    const valueToEdit = isNickSet ? nick : realName;
+    let vipClass = "";
+    if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
+    if (isNickSet) { return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`; }
+    return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
+}
+
 function initVersionControl() {
     const badge = document.querySelector('.version-badge');
     if (badge) {
@@ -251,6 +240,8 @@ function initTooltips() {
         'btnConnect': 'เชื่อมต่อ YouTube', 'btnSound': 'เปิด/ปิดเสียง', 'stockSize': 'จำนวนรายการ'
     };
     for(const [id, text] of Object.entries(tips)) { const el = document.getElementById(id); if(el) el.title = text; }
+    const histBtn = document.querySelector('button[onclick="window.openHistory()"]');
+    if(histBtn) histBtn.title = "ดูประวัติการไลฟ์ย้อนหลัง";
 }
 
 function syncAiCommanderStatus() {
@@ -264,10 +255,7 @@ function syncAiCommanderStatus() {
     });
 }
 
-// ============================================================
-// 3. CORE LOGIC FUNCTIONS (DEPENDENCY LEVEL 1)
-// ============================================================
-
+// --- Logic ---
 async function processOrder(num, owner, uid, src, price, method = 'manual') {
     const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
     try {
@@ -287,7 +275,8 @@ async function processOrder(num, owner, uid, src, price, method = 'manual') {
                 return currentData;
             }
         });
-        // Sound is handled by listener for consistency
+        const current = stockData[num];
+        if (current && current.owner === owner) playDing();
     } catch (e) { console.error("Transaction failed: ", e); }
 }
 
@@ -310,10 +299,6 @@ function processCancel(num, reason) {
         });
     }
 }
-
-// ============================================================
-// 4. DISPLAY FUNCTIONS (DEPENDENCY LEVEL 2)
-// ============================================================
 
 function renderSlot(num, data) {
     const el = document.getElementById('stock-' + num); if(!el) return;
@@ -385,6 +370,33 @@ function updateStats() {
     document.getElementById('total-count').innerText = total;
 }
 
+function connectToStock(vid) {
+    if (unsubscribeStock) unsubscribeStock();
+    currentVideoId = vid; lastScrollTimestamp = Date.now();
+    let isFirstLoad = true; 
+    unsubscribeStock = onValue(ref(db, `stock/${vid}`), snap => {
+        const val = snap.val() || {};
+        if (!isFirstLoad) {
+            const keys = Object.keys({...val, ...stockData});
+            for (const key of keys) {
+                const newItem = val[key];
+                const oldItem = stockData[key];
+                if (newItem?.owner && (!oldItem || !oldItem.owner)) {
+                     playDing(); 
+                     setTimeout(() => {
+                        const el = document.getElementById('stock-' + key);
+                        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('highlight'); }
+                    }, 50);
+                }
+                if ((!newItem || !newItem.owner) && oldItem?.owner) { playCancel(); }
+            }
+        }
+        stockData = val; renderGrid(); updateStats(); window.updateShippingButton();
+        if(document.getElementById('dashboard').style.display === 'flex') window.renderDashboardTable();
+        isFirstLoad = false;
+    });
+}
+
 function renderChat(name, msg, type, uid, img, realName, detectionMethod = null) {
     const div = document.createElement('div'); div.className = `chat-row ${type} new-msg`;
     let tagHtml = '';
@@ -396,10 +408,6 @@ function renderChat(name, msg, type, uid, img, realName, detectionMethod = null)
     if (!isUserScrolledUp) { vp.scrollTop = vp.scrollHeight; } 
     else { document.getElementById('btn-scroll-down').style.display = 'block'; }
 }
-
-// ============================================================
-// 5. EXTERNAL API FUNCTIONS (DEPENDENCY LEVEL 3)
-// ============================================================
 
 async function analyzeChatWithAI(text) {
     if (!geminiApiKey || !isAiCommander) return null;
@@ -509,7 +517,6 @@ async function smartFetch(url) {
     } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
 }
 
-// Defined BEFORE usage in connectYoutube
 async function loadChat() {
     if (!isConnected || !activeChatId) return; if (isSimulating) return;
     const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
@@ -518,6 +525,9 @@ async function loadChat() {
         if (data.items) { 
             updateStatusIcon('stat-chat', 'ok'); 
             for (const item of data.items) { await processMessage(item); }
+        }
+        // Critical Fix: Always update token if present, even if no items
+        if (data.nextPageToken) {
             chatToken = data.nextPageToken; 
         }
         const delay = data.pollingIntervalMillis || 5000; chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
@@ -554,35 +564,8 @@ async function connectYoutube(vid) {
     }
 }
 
-function connectToStock(vid) {
-    if (unsubscribeStock) unsubscribeStock();
-    currentVideoId = vid; lastScrollTimestamp = Date.now();
-    let isFirstLoad = true; 
-    unsubscribeStock = onValue(ref(db, `stock/${vid}`), snap => {
-        const val = snap.val() || {};
-        if (!isFirstLoad) {
-            const keys = Object.keys({...val, ...stockData});
-            for (const key of keys) {
-                const newItem = val[key];
-                const oldItem = stockData[key];
-                if (newItem?.owner && (!oldItem || !oldItem.owner)) {
-                     playDing(); 
-                     setTimeout(() => {
-                        const el = document.getElementById('stock-' + key);
-                        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('highlight'); }
-                    }, 50);
-                }
-                if ((!newItem || !newItem.owner) && oldItem?.owner) { playCancel(); }
-            }
-        }
-        stockData = val; renderGrid(); updateStats(); window.updateShippingButton();
-        if(document.getElementById('dashboard').style.display === 'flex') window.renderDashboardTable();
-        isFirstLoad = false;
-    });
-}
-
 // ============================================================
-// 6. WINDOW EXPORTS (Assigned AFTER all definitions)
+// 4. WINDOW EXPORTS
 // ============================================================
 
 window.forceUpdate = () => { if(confirm('ยืนยันการโหลดโปรแกรมใหม่?')) { localStorage.removeItem('app_version'); window.location.reload(true); } };
@@ -683,6 +666,18 @@ window.loadHistoryList = async () => {
         window.renderHistoryPage();
     } catch(e) {
         list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
+    }
+};
+window.scrollToBottom = () => {
+    const vp = document.getElementById('chat-viewport');
+    if (vp) {
+        // Force scroll with timeout to allow UI update
+        setTimeout(() => {
+            vp.scrollTop = vp.scrollHeight;
+            isUserScrolledUp = false;
+            const btn = document.getElementById('btn-scroll-down');
+            if(btn) btn.style.display = 'none';
+        }, 50);
     }
 };
 
@@ -788,7 +783,7 @@ window.toggleSimulation = () => {
 };
 
 // ============================================================
-// 7. STARTUP (LISTENER ATTACHMENT)
+// 5. EXECUTION START
 // ============================================================
 signInAnonymously(auth);
 remove(ref(db, 'stock/demo'));
@@ -833,6 +828,7 @@ onAuthStateChanged(auth, user => {
         
         onValue(ref(db, '.info/connected'), s => updateStatusIcon('stat-db', s.val() ? 'ok' : 'err'));
 
+        // Away Mode Listener
         onValue(ref(db, 'system/awayMode'), (snap) => {
             const val = snap.val();
             const banner = document.getElementById('awayBanner');
