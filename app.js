@@ -16,8 +16,9 @@ const firebaseConfig = {
 const API_KEYS = ["AIzaSyAVzYQN51V-kITnyJWGy8IVSktitxrVD8g", "AIzaSyBlnw6tpETYu61XSNqd7zXt25Fv_vmbWJU", "AIzaSyAX3dwUqBFeCBjjZixVnlcBz56gAfNWzs0", "AIzaSyAxjRAs01mpt-NxQiR3yStr6Q-57EiQq64"];
 
 // ============================================================
-// 2. GLOBAL VARIABLES (Declared FIRST)
+// 2. GLOBAL VARIABLES
 // ============================================================
+// System State
 let currentKeyIdx = 0;
 let isConnected = false;
 let isConnecting = false;
@@ -26,27 +27,23 @@ let myDeviceId = 'dev-' + Math.random().toString(36).substr(2, 9);
 let isAiCommander = false; 
 let geminiApiKey = localStorage.getItem('geminiApiKey') || '';
 
+// Data State
 let currentVideoId = 'demo';
 let stockData = {};
 let savedNames = {};
 let shippingData = {};
 let seenMessageIds = {};
 
-// Timers & Intervals
-let intervalId;
-let viewerIntervalId;
-let simIntervalId;
-let autoDisconnectTimer;
-let chatTimeoutId;
-let awayInterval = null;
+// Timers
+let intervalId, viewerIntervalId, simIntervalId, autoDisconnectTimer, chatTimeoutId, awayInterval;
 
-// Chat & Scroll
+// Chat
 let activeChatId = '';
 let chatToken = '';
 let lastScrollTimestamp = 0; 
-let unsubscribeStock;
-let unsubscribeSystem;
+let unsubscribeStock, unsubscribeSystem;
 
+// UI State
 let currentFontSize = 16;
 let currentGridSize = 1;
 let isUserScrolledUp = false;
@@ -75,7 +72,7 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
-// Check Version & Reload
+// Check Version
 const localVer = localStorage.getItem('app_version');
 if (localVer !== AppInfo.version) {
     console.log(`Version update: ${localVer} -> ${AppInfo.version}`);
@@ -104,10 +101,48 @@ const Toast = Swal.mixin({
 });
 
 // ============================================================
-// 3. LOGIC FUNCTIONS (DEFINED BEFORE ASSIGNMENT)
+// 3. ALL FUNCTIONS (DEFINED FIRST)
 // ============================================================
 
-// --- Audio Logic ---
+// --- Helper Functions ---
+function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
+function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
+function updateStatusIcon(id, status) { 
+    const el = document.getElementById(id);
+    if(el) { el.className = 'status-item'; el.classList.add(status); }
+}
+function updateKeyDisplay() { 
+    const el = document.getElementById('stat-key');
+    if(el) el.innerHTML = `<i class="fa-solid fa-key"></i> ${currentKeyIdx + 1}`; 
+}
+function setLoading(s) { const btn = document.getElementById('btnConnect'); if(btn) btn.disabled = s; }
+function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
+function saveHistory(vid, title) { if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); }
+function updateAwayTimer() {
+    if (!currentAwayState) return;
+    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
+    const minutes = Math.floor(diff / 60);
+    const seconds = diff % 60;
+    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const el = document.getElementById('awayTimer');
+    if (el) el.innerText = text;
+}
+function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
+
+function generateNameHtml(uid, realName) {
+    const color = stringToColor(uid); 
+    let nick = realName;
+    let displayName = realName;
+    let isNickSet = false;
+    if (savedNames[uid]) { if (typeof savedNames[uid] === 'object') { nick = savedNames[uid].nick; } else { nick = savedNames[uid]; } isNickSet = true; displayName = nick; }
+    const valueToEdit = isNickSet ? nick : realName;
+    let vipClass = "";
+    if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
+    if (isNickSet) { return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`; }
+    return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
+}
+
+// --- Audio Functions ---
 function initAudio() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -117,23 +152,19 @@ function initAudio() {
 function unlockAudio() {
     initAudio();
     if (isAudioUnlocked) return;
-    
-    if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
-    }
-    
+    if (audioCtx.state === 'suspended') audioCtx.resume();
     synth.cancel();
-    // Silent buffer play
-    const buffer = audioCtx.createBuffer(1, 1, 22050);
-    const source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioCtx.destination);
-    source.start(0);
-
+    // Silent play
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    g.gain.value = 0;
+    o.connect(g);
+    g.connect(audioCtx.destination);
+    o.start(0);
+    o.stop(0.1);
     isAudioUnlocked = true;
     console.log("Audio Unlocked");
 }
-['click', 'touchstart', 'keydown'].forEach(evt => document.addEventListener(evt, unlockAudio, { once: false }));
 
 function queueSpeech(txt) { 
     if(!isSoundOn) return; 
@@ -163,14 +194,9 @@ function playDing() {
     initAudio();
     if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     if(!audioCtx) return;
-    
-    const o = audioCtx.createOscillator(); 
-    const g = audioCtx.createGain(); 
-    o.connect(g); g.connect(audioCtx.destination); 
-    o.frequency.setValueAtTime(800, audioCtx.currentTime); 
-    o.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime+0.1); 
-    g.gain.setValueAtTime(0.3, audioCtx.currentTime); 
-    g.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime+0.1); 
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.connect(g); g.connect(audioCtx.destination); 
+    o.frequency.setValueAtTime(800, audioCtx.currentTime); o.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime+0.1); 
+    g.gain.setValueAtTime(0.3, audioCtx.currentTime); g.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime+0.1); 
     o.start(); o.stop(audioCtx.currentTime+0.1); 
 }
 
@@ -179,50 +205,13 @@ function playCancel() {
     initAudio();
     if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     if(!audioCtx) return;
-
-    const o = audioCtx.createOscillator(); 
-    const g = audioCtx.createGain(); 
-    o.type='sawtooth'; 
-    o.connect(g); g.connect(audioCtx.destination); 
-    o.frequency.setValueAtTime(150, audioCtx.currentTime); 
-    g.gain.setValueAtTime(0.2, audioCtx.currentTime); 
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.type='sawtooth'; o.connect(g); g.connect(audioCtx.destination); 
+    o.frequency.setValueAtTime(150, audioCtx.currentTime); g.gain.setValueAtTime(0.2, audioCtx.currentTime); 
     o.start(); o.stop(audioCtx.currentTime+0.3); 
 }
 setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
-// --- Helpers ---
-function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
-function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
-function updateStatusIcon(id, status) { const el = document.getElementById(id); if(el) { el.className = 'status-item'; el.classList.add(status); } }
-function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
-function updateKeyDisplay() { document.getElementById('stat-key').innerHTML = `<i class="fa-solid fa-key"></i> ${currentKeyIdx + 1}`; }
-function setLoading(s) { const btn = document.getElementById('btnConnect'); if(btn) btn.disabled = s; }
-function saveHistory(vid, title) { if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); }
-function updateAwayTimer() {
-    if (!currentAwayState) return;
-    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
-    const minutes = Math.floor(diff / 60);
-    const seconds = diff % 60;
-    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    const el = document.getElementById('awayTimer');
-    if (el) el.innerText = text;
-}
-function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
-
-function generateNameHtml(uid, realName) {
-    const color = stringToColor(uid); 
-    let nick = realName;
-    let displayName = realName;
-    let isNickSet = false;
-    if (savedNames[uid]) { if (typeof savedNames[uid] === 'object') { nick = savedNames[uid].nick; } else { nick = savedNames[uid]; } isNickSet = true; displayName = nick; }
-    const valueToEdit = isNickSet ? nick : realName;
-    let vipClass = "";
-    if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
-    if (isNickSet) { return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`; }
-    return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
-}
-
-// --- Order Processing Logic ---
+// --- Core Logic ---
 async function processOrder(num, owner, uid, src, price, method = 'manual') {
     const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
     try {
@@ -267,7 +256,6 @@ function processCancel(num, reason) {
     }
 }
 
-// --- Grid Rendering ---
 function renderSlot(num, data) {
     const el = document.getElementById('stock-' + num); if(!el) return;
     if (!data.owner) {
@@ -285,8 +273,7 @@ function renderSlot(num, data) {
     const isNewOrder = (Date.now() - data.time) < 15000;
     if (isNewOrder) {
         el.classList.add('new-order');
-        const remaining = 15000 - (Date.now() - data.time);
-        setTimeout(() => el.classList.remove('new-order'), remaining);
+        setTimeout(() => el.classList.remove('new-order'), 15000 - (Date.now() - data.time));
     } else { el.classList.remove('new-order'); }
     document.getElementById(`status-${num}`).innerText = data.owner || 'Unknown';
     document.getElementById(`price-${num}`).innerText = data.price ? '฿'+data.price : '';
@@ -339,7 +326,6 @@ function updateStats() {
     document.getElementById('total-count').innerText = total;
 }
 
-// --- Connections ---
 function connectToStock(vid) {
     if (unsubscribeStock) unsubscribeStock();
     currentVideoId = vid; lastScrollTimestamp = Date.now();
@@ -377,6 +363,55 @@ function renderChat(name, msg, type, uid, img, realName, detectionMethod = null)
     const vp = document.getElementById('chat-viewport');
     if (!isUserScrolledUp) { vp.scrollTop = vp.scrollHeight; } 
     else { document.getElementById('btn-scroll-down').style.display = 'block'; }
+}
+
+async function analyzeChatWithAI(text) {
+    if (!geminiApiKey || !isAiCommander) return null;
+    const prompt = `
+Role: You are an AI assistant for a Thai live commerce clothing shop (Manowzab). 
+Your task is to extract the user's intent from their chat message.
+
+Key Entities:
+- **Product ID**: Usually a number (e.g., 1, 15, 99) or starts with F/CF (e.g., F1, CF10).
+- **Price**: A number usually followed by "บาท" or appearing after the ID (e.g., 10=100).
+
+Intents:
+1. **buy**: User wants to purchase an item.
+   - Pattern: "[ID]", "F[ID]", "CF[ID]", "รับ [ID]", "[ID] [Name]", "[ID]=[Price]".
+   - Examples: "10", "F10", "10 ครับ", "10 น้องบี", "10 100", "เอา 10".
+   - CRITICAL EXCEPTION: If the message contains specific question words (เท่าไหร่, ไหม, หรอ, หรือ, ไง) OR specific attribute words (อก, เอว, ยาว, สี, ผ้า, ตำหนิ) appearing alongside a number, it is ALWAYS a "question", NOT a "buy".
+     - "50 สีอะไร" -> question
+     - "10 อกเท่าไหร่" -> question
+     - "50 มีตำหนิไหม" -> question
+     - "ผ้าอะไร 10" -> question
+
+2. **cancel**: User wants to cancel an order.
+   - Pattern: "CC", "cancel", "ยกเลิก", "ไม่เอา".
+   - Examples: "CC 10", "ยกเลิก 10", "ไม่เอา 10 แล้ว".
+
+3. **question**: User is asking about product details.
+   - Keywords: อก, เอว, ยาว, ผ้า, ราคา, สี, ว่างไหม, ทันไหม, เท่าไหร่, กี่บาท, แบบไหน, ดู, ตำหนิ.
+   - Examples: "10 ว่างไหม", "อก 50 ไหม", "ขอดู 10", "50 สีอะไร".
+
+4. **shipping**: User wants to ship items.
+   - Keywords: "พร้อมส่ง", "สรุปยอด", "ส่งของ", "คิดเงิน".
+
+5. **spam**: Greetings, chit-chat.
+
+Response Format (JSON only):
+{"intent": "buy"|"cancel"|"question"|"shipping"|"spam", "id": number|null, "price": number|null}
+
+Input Message: "${text}"
+`;
+    try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+        const result = await response.json();
+        const match = result.candidates?.[0]?.content?.parts?.[0]?.text?.match(/\{.*?\}/s);
+        return match ? JSON.parse(match[0]) : null;
+    } catch (e) { return null; }
 }
 
 async function processMessage(item) {
@@ -427,8 +462,91 @@ async function processMessage(item) {
     }
 }
 
+async function connectYoutube(vid) {
+    try {
+        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${vid}`);
+        if (!d.items || d.items.length === 0) throw new Error("ID ไม่ถูกต้อง");
+        const item = d.items[0];
+        document.getElementById('live-title').innerText = item.snippet.title;
+        saveHistory(vid, item.snippet.title);
+        queueSpeech("เชื่อมต่อสำเร็จ กำลังอ่านคอมเมนต์จาก " + item.snippet.title);
+        isConnected = true; setLoading(false); isConnecting = false;
+        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
+        updateStatusIcon('stat-api', 'ok');
+        if (item.liveStreamingDetails?.activeLiveChatId) {
+            activeChatId = item.liveStreamingDetails.activeLiveChatId; chatToken = ''; loadChat(); updateViewerCount(vid); viewerIntervalId = setInterval(()=>updateViewerCount(vid), 15000);
+        } else { activeChatId = null; throw new Error("No Live Chat"); }
+    } catch(e) { 
+        console.error(e); 
+        isConnected = true; setLoading(false); isConnecting = false; 
+        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark"; 
+        updateStatusIcon('stat-api', 'err'); 
+    }
+}
+
+async function smartFetch(url) {
+    try {
+        updateStatusIcon('stat-api', 'ok'); let res = await fetch(url + "&key=" + API_KEYS[currentKeyIdx]); let data = await res.json();
+        if (data.error) { 
+            if (currentKeyIdx < API_KEYS.length - 1) { currentKeyIdx++; return smartFetch(url); } 
+            else { Swal.fire('API Key Error', 'โควต้าเต็มทุกคีย์แล้ว', 'error'); throw new Error(data.error.message); }
+        }
+        return data;
+    } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
+}
+
+function initVersionControl() {
+    const badge = document.querySelector('.version-badge');
+    if (badge) {
+        badge.innerText = `${AppInfo.version}`;
+        badge.title = `เวอร์ชั่น: ${AppInfo.version} (${AppInfo.releaseDate})\n\n${AppInfo.changelog.join('\n')}`;
+    }
+    const toolsDropdown = document.getElementById('toolsDropdown');
+    if (toolsDropdown && !document.getElementById('btnForceUpdate')) {
+        const a = document.createElement('a');
+        a.id = 'btnForceUpdate';
+        a.innerHTML = '<i class="fa-solid fa-rotate"></i> บังคับอัปเดต (Force Update)';
+        a.style.color = '#00e676';
+        a.onclick = () => window.forceUpdate();
+        toolsDropdown.insertBefore(a, toolsDropdown.firstChild);
+    }
+}
+
+function initStatusIcons() {
+    const cluster = document.querySelector('.status-cluster');
+    if(cluster) {
+        cluster.innerHTML = `
+            <span id="stat-db" class="status-item" title="สถานะฐานข้อมูล"><i class="fa-solid fa-database"></i></span>
+            <span id="stat-api" class="status-item" title="สถานะ YouTube API"><i class="fa-brands fa-youtube"></i></span>
+            <span id="stat-chat" class="status-item" title="สถานะการดึงแชท"><i class="fa-solid fa-comments"></i></span>
+            <span id="stat-key" class="key-indicator" title="API Key"><i class="fa-solid fa-key"></i> 1</span>
+        `;
+    }
+}
+
+function syncAiCommanderStatus() {
+    onValue(ref(db, 'system/aiCommander'), (snap) => {
+        const commanderId = snap.val();
+        const btn = document.getElementById('btnAICommander');
+        if(!btn) return;
+        if (commanderId === myDeviceId) { isAiCommander = true; btn.innerHTML = '🤖 AI: เปิด (Commander)'; btn.className = 'btn btn-ai active'; } 
+        else if (commanderId) { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด (เครื่องอื่นคุม)'; btn.className = 'btn btn-ai remote'; } 
+        else { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด'; btn.className = 'btn btn-ai inactive'; }
+    });
+}
+
+function initTooltips() {
+    const tips = {
+        'btnVoice': 'สั่งงานด้วยเสียง', 'btnAICommander': 'ระบบ AI ช่วยจอง', 'btn-shipping': 'รายการพร้อมส่ง',
+        'btnConnect': 'เชื่อมต่อ YouTube', 'btnSound': 'เปิด/ปิดเสียง', 'stockSize': 'จำนวนรายการ'
+    };
+    for(const [id, text] of Object.entries(tips)) { const el = document.getElementById(id); if(el) el.title = text; }
+    const histBtn = document.querySelector('button[onclick="window.openHistory()"]');
+    if(histBtn) histBtn.title = "ดูประวัติการไลฟ์ย้อนหลัง";
+}
+
 // ============================================================
-// 4. GLOBAL ASSIGNMENTS (Bottom, referencing hoisted functions)
+// 4. WINDOW EXPORTS (Assigned AFTER functions are defined)
 // ============================================================
 
 window.forceUpdate = () => { if(confirm('ยืนยันการโหลดโปรแกรมใหม่?')) { localStorage.removeItem('app_version'); window.location.reload(true); } };
@@ -451,7 +569,7 @@ window.filterHistory = () => { historyCurrentPage = 1; window.renderHistoryPage(
 window.deleteHistory = (vid) => { Swal.fire({title:'ลบประวัติ?', showCancelButton:true}).then(r=>{ if(r.isConfirmed) remove(ref(db, 'history/'+vid)).then(() => window.loadHistoryList()); }); };
 window.toggleShowAll = () => { window.renderDashboardTable(); };
 window.toggleAwayMode = async () => { try { unlockAudio(); const snap = await get(ref(db, 'system/awayMode')); const current = snap.val() || {}; if (current.isAway) { await update(ref(db, 'system/awayMode'), { isAway: false }); } else { await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() }); await set(ref(db, 'system/aiCommander'), myDeviceId); } } catch(e) { console.error("Away Mode Error", e); } };
-window.toggleConnection = () => { /* Defined above */ 
+window.toggleConnection = () => { 
     if (isConnected) {
         clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false;
         document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary";
@@ -470,7 +588,7 @@ window.toggleConnection = () => { /* Defined above */
         document.getElementById('status-dot').className = "status-dot online";
     });
 };
-window.renderDashboardTable = () => { /* Defined above */ 
+window.renderDashboardTable = () => { 
     const dashboard = document.querySelector('.dashboard-overlay');
     const scrollY = dashboard ? dashboard.scrollTop : 0; 
     const tbody = document.getElementById('shipping-body'); 
@@ -514,7 +632,7 @@ window.renderDashboardTable = () => { /* Defined above */
         if(dashboard) dashboard.scrollTop = scrollY;
     }
 };
-window.loadHistoryList = async () => { /* Defined above */ 
+window.loadHistoryList = async () => { 
     const list = document.getElementById('history-list');
     list.innerHTML = '<li style="text-align:center; color:#888;">กำลังโหลดประวัติ...</li>';
     try {
@@ -547,7 +665,7 @@ window.handleStockClick = (num) => {
                     update(ref(db), updates);
                 } else { 
                     processOrder(num, val, 'manual-'+Date.now(), 'manual'); 
-                    Toast.fire({icon: 'success', title: `คุณ ${val} จองเบอร์ ${num} สำเร็จ`}); // NEW: Toast feedback
+                    Toast.fire({icon: 'success', title: `คุณ ${val} จองเบอร์ ${num} สำเร็จ`}); 
                 }
             }
         });
@@ -575,7 +693,7 @@ window.doAction = (num, action) => {
         const msg = `${nick} ยกเลิกรายการที่ ${num} ค่ะ`;
         processCancel(num, msg); 
         broadcastMessage(msg); 
-        Toast.fire({icon: 'success', title: 'ยกเลิกรายการสำเร็จ'}); // NEW: Toast feedback
+        Toast.fire({icon: 'success', title: 'ยกเลิกรายการสำเร็จ'});
     }
 };
 
@@ -657,7 +775,7 @@ window.renderHistoryPage = () => { /* Defined above */
 window.deleteHistory = (vid) => { Swal.fire({title:'ลบประวัติ?', showCancelButton:true}).then(r=>{ if(r.isConfirmed) remove(ref(db, 'history/'+vid)).then(() => window.loadHistoryList()); }); };
 window.toggleShowAll = () => { window.renderDashboardTable(); };
 window.toggleAwayMode = async () => { try { unlockAudio(); const snap = await get(ref(db, 'system/awayMode')); const current = snap.val() || {}; if (current.isAway) { await update(ref(db, 'system/awayMode'), { isAway: false }); } else { await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() }); await set(ref(db, 'system/aiCommander'), myDeviceId); } } catch(e) { console.error("Away Mode Error", e); } };
-window.toggleConnection = () => { /* Defined above */ 
+window.toggleConnection = () => { 
     if (isConnected) {
         clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false;
         document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary";
@@ -675,65 +793,6 @@ window.toggleConnection = () => { /* Defined above */
         document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
         document.getElementById('status-dot').className = "status-dot online";
     });
-};
-window.renderDashboardTable = () => { /* Defined above */ 
-    const dashboard = document.querySelector('.dashboard-overlay');
-    const scrollY = dashboard ? dashboard.scrollTop : 0; 
-    const tbody = document.getElementById('shipping-body'); 
-    if(tbody) {
-        tbody.innerHTML = '';
-        const userOrders = {};
-        const allBuyerUids = new Set();
-        Object.keys(stockData).forEach(num => {
-            const item = stockData[num]; 
-            if(item.uid) {
-                allBuyerUids.add(item.uid);
-                if (!userOrders[item.uid]) userOrders[item.uid] = { name: item.owner, items: [], totalPrice: 0, uid: item.uid };
-                const price = item.price ? parseInt(item.price) : 0;
-                userOrders[item.uid].items.push({ num: num, price: price });
-                userOrders[item.uid].totalPrice += price;
-            }
-        });
-        const currentShipping = shippingData[currentVideoId] || {};
-        const readyUids = [...allBuyerUids].filter(uid => currentShipping[uid] && currentShipping[uid].ready);
-        const notReadyUids = [...allBuyerUids].filter(uid => !(currentShipping[uid] && currentShipping[uid].ready));
-        if (notReadyUids.length > 0) {
-            const addRow = document.createElement('tr');
-            addRow.innerHTML = `<td colspan="3" style="text-align:center; padding:10px; background:#2a2a2a;"><div style="display:flex; gap:10px; justify-content:center; align-items:center;"><i class="fa-solid fa-user-plus"></i><select id="manualShipSelect" style="padding:5px; border-radius:4px; background:#444; color:#fff; border:1px solid #555; max-width:200px;"><option value="">-- เลือกลูกค้าเพื่อส่งของ --</option>${notReadyUids.map(uid => `<option value="${uid}">${savedNames[uid]?.nick || userOrders[uid].name}</option>`).join('')}</select><button class="btn btn-success" onclick="window.manualAddShipping()" style="padding:4px 10px; font-size:0.9em;">เพิ่ม</button></div></td>`;
-            tbody.appendChild(addRow);
-        } else if (allBuyerUids.size > 0 && readyUids.length === allBuyerUids.size) {
-             const infoRow = document.createElement('tr'); infoRow.innerHTML = `<td colspan="3" style="text-align:center; color:#00e676; padding:10px;">✅ ลูกค้าทุกคนอยู่ในรายการส่งของแล้ว</td>`; tbody.appendChild(infoRow);
-        }
-        if (readyUids.length === 0) {
-            const emptyRow = document.createElement('tr'); emptyRow.innerHTML = `<td colspan="3" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`; tbody.appendChild(emptyRow);
-        } else {
-            let index = 1;
-            readyUids.forEach(uid => {
-                const order = userOrders[uid];
-                let custData = savedNames[uid] || { nick: order.name };
-                const tr = document.createElement('tr');
-                const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
-                tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`;
-                tbody.appendChild(tr);
-            });
-        }
-        if(dashboard) dashboard.scrollTop = scrollY;
-    }
-};
-window.loadHistoryList = async () => { /* Defined above */ 
-    const list = document.getElementById('history-list');
-    list.innerHTML = '<li style="text-align:center; color:#888;">กำลังโหลดประวัติ...</li>';
-    try {
-        const snapshot = await get(ref(db, 'history'));
-        const items = [];
-        snapshot.forEach(c => items.push({ id: c.key, ...c.val() }));
-        items.sort((a,b) => (b.timestamp||0)-(a.timestamp||0));
-        allHistoryData = items;
-        historyCurrentPage = 1;
-        window.renderHistoryPage();
-    } catch(e) {
-        list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
-    }
 };
 
 // ============================================================
