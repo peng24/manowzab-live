@@ -64,6 +64,11 @@ let awayStartTime = 0;
 let awayInterval = null;
 let currentAwayState = false;
 
+// History & Pagination
+let allHistoryData = [];
+let historyCurrentPage = 1;
+const historyItemsPerPage = 10;
+
 // --- UTILITIES ---
 function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
 function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
@@ -138,7 +143,6 @@ function playCancel() { if(!isSoundOn) return; const o = audioCtx.createOscillat
 setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
 // --- HELPER FUNCTIONS DEFINITIONS ---
-// Define this BEFORE it is called
 function syncAiCommanderStatus() {
     onValue(ref(db, 'system/aiCommander'), (snap) => {
         const commanderId = snap.val();
@@ -147,6 +151,25 @@ function syncAiCommanderStatus() {
         else if (commanderId) { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด (เครื่องอื่นคุม)'; btn.className = 'btn btn-ai remote'; } 
         else { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด'; btn.className = 'btn btn-ai inactive'; }
     });
+}
+
+function initTooltips() {
+    const tips = {
+        'btnVoice': 'เปิด/ปิดการสั่งงานด้วยเสียง',
+        'btnAICommander': 'เปิดระบบ AI ช่วยจับการจองอัตโนมัติ',
+        'btn-shipping': 'ดูรายการที่ลูกค้าแจ้งพร้อมส่ง (รูปรถ)',
+        'btnConnect': 'เชื่อมต่อ/ตัดการเชื่อมต่อกับ YouTube Live',
+        'btnSound': 'เปิด/ปิดเสียงพูดและเอฟเฟกต์',
+        'stockSize': 'จำนวนรายการสินค้าทั้งหมด',
+        'vidInput': 'รหัส Video ID ของ YouTube'
+    };
+    for (const [id, text] of Object.entries(tips)) {
+        const el = document.getElementById(id);
+        if(el) el.title = text;
+    }
+    // General tooltip for history button (closest parent check not needed if we select by class or structure, but for now simple ids)
+    const histBtn = document.querySelector('button[onclick="window.openHistory()"]');
+    if(histBtn) histBtn.title = "ดูประวัติการไลฟ์ย้อนหลัง";
 }
 
 // --- UI FUNCTIONS ---
@@ -183,6 +206,7 @@ window.updateShippingButton = () => {
     }
 };
 
+// --- UPDATED SHIPPING DASHBOARD ---
 window.renderDashboardTable = () => {
     const dashboard = document.querySelector('.dashboard-overlay');
     const scrollY = dashboard ? dashboard.scrollTop : 0; 
@@ -191,27 +215,86 @@ window.renderDashboardTable = () => {
     if(tbody) {
         tbody.innerHTML = '';
         const userOrders = {};
+        const allBuyerUids = new Set();
         
+        // 1. Scan Stock for all buyers
         Object.keys(stockData).forEach(num => {
-            const item = stockData[num]; const uid = item.uid;
-            if (!userOrders[uid]) userOrders[uid] = { name: item.owner, items: [], totalPrice: 0, uid: uid };
-            const price = item.price ? parseInt(item.price) : 0;
-            userOrders[uid].items.push({ num: num, price: price }); userOrders[uid].totalPrice += price;
+            const item = stockData[num]; 
+            if(item.uid) {
+                allBuyerUids.add(item.uid);
+                // We only build userOrders for those we will display later, but lets gather data first
+                if (!userOrders[item.uid]) userOrders[item.uid] = { name: item.owner, items: [], totalPrice: 0, uid: item.uid };
+                const price = item.price ? parseInt(item.price) : 0;
+                userOrders[item.uid].items.push({ num: num, price: price });
+                userOrders[item.uid].totalPrice += price;
+            }
         });
 
-        let index = 1; 
-        for (const uid in userOrders) {
-            const order = userOrders[uid]; 
-            let custData = savedNames[uid] || { nick: order.name };
-            
-            const tr = document.createElement('tr');
-            const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
-            
-            tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`;
-            tbody.appendChild(tr);
+        // 2. Identify who is ready
+        const currentShipping = shippingData[currentVideoId] || {};
+        const readyUids = [...allBuyerUids].filter(uid => currentShipping[uid] && currentShipping[uid].ready);
+        const notReadyUids = [...allBuyerUids].filter(uid => !(currentShipping[uid] && currentShipping[uid].ready));
+
+        // 3. Render Selector for adding buyers manually
+        if (notReadyUids.length > 0) {
+            const addRow = document.createElement('tr');
+            addRow.innerHTML = `
+                <td colspan="3" style="text-align:center; padding:10px; background:#2a2a2a;">
+                    <div style="display:flex; gap:10px; justify-content:center; align-items:center;">
+                        <i class="fa-solid fa-user-plus"></i>
+                        <select id="manualShipSelect" style="padding:5px; border-radius:4px; background:#444; color:#fff; border:1px solid #555; max-width:200px;">
+                            <option value="">-- เลือกลูกค้าเพื่อส่งของ --</option>
+                            ${notReadyUids.map(uid => `<option value="${uid}">${savedNames[uid]?.nick || userOrders[uid].name}</option>`).join('')}
+                        </select>
+                        <button class="btn btn-success" onclick="window.manualAddShipping()" style="padding:4px 10px; font-size:0.9em;">เพิ่ม</button>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(addRow);
+        } else if (allBuyerUids.size > 0 && readyUids.length === allBuyerUids.size) {
+             const infoRow = document.createElement('tr');
+             infoRow.innerHTML = `<td colspan="3" style="text-align:center; color:#00e676; padding:10px;">✅ ลูกค้าทุกคนอยู่ในรายการส่งของแล้ว</td>`;
+             tbody.appendChild(infoRow);
+        }
+
+        // 4. Render Table (Ready Only)
+        if (readyUids.length === 0) {
+            const emptyRow = document.createElement('tr');
+            emptyRow.innerHTML = `<td colspan="3" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`;
+            tbody.appendChild(emptyRow);
+        } else {
+            let index = 1;
+            readyUids.forEach(uid => {
+                const order = userOrders[uid];
+                let custData = savedNames[uid] || { nick: order.name };
+                
+                const tr = document.createElement('tr');
+                const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
+                
+                tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`;
+                tbody.appendChild(tr);
+            });
         }
         
         if(dashboard) dashboard.scrollTop = scrollY;
+    }
+};
+
+window.manualAddShipping = () => {
+    const uid = document.getElementById('manualShipSelect').value;
+    if(uid) {
+        update(ref(db, `shipping/${currentVideoId}/${uid}`), {ready: true, timestamp: Date.now()})
+        .then(() => {
+            // Re-render handled by listener
+            Swal.fire({
+                icon: 'success',
+                title: 'เพิ่มลงรายการส่งของแล้ว',
+                toast: true,
+                position: 'top-end',
+                showConfirmButton: false,
+                timer: 1500
+            });
+        });
     }
 };
 
@@ -628,16 +711,90 @@ window.askAiKey = () => { Swal.fire({ title: 'ตั้งค่า Gemini API K
 window.adjustZoom = (n) => { currentFontSize+=n; document.documentElement.style.setProperty('--chat-size', currentFontSize+'px'); };
 window.adjustGridZoom = (n) => { currentGridSize+=n; document.documentElement.style.setProperty('--grid-size', currentGridSize+'em'); };
 
-window.filterHistory = () => {
-    const input = document.getElementById('historySearchInput');
-    const filter = input.value.toUpperCase();
-    const ul = document.getElementById("history-list");
-    const li = ul.getElementsByTagName('li');
-    for (let i = 0; i < li.length; i++) {
-        const txtValue = li[i].textContent || li[i].innerText;
-        if (txtValue.toUpperCase().indexOf(filter) > -1) { li[i].style.display = ""; } 
-        else { li[i].style.display = "none"; }
+// --- UPDATED HISTORY WITH PAGINATION ---
+window.openHistory = () => { 
+    document.getElementById('history-modal').style.display = 'flex'; 
+    window.loadHistoryList(); // Load only when opened
+};
+window.closeHistory = () => { document.getElementById('history-modal').style.display = 'none'; };
+
+window.loadHistoryList = async () => {
+    const list = document.getElementById('history-list');
+    list.innerHTML = '<li style="text-align:center; color:#888;">กำลังโหลดประวัติ...</li>';
+    
+    try {
+        const snapshot = await get(ref(db, 'history'));
+        const items = [];
+        snapshot.forEach(c => items.push({ id: c.key, ...c.val() }));
+        // Sort Newest first
+        items.sort((a,b) => (b.timestamp||0)-(a.timestamp||0));
+        allHistoryData = items;
+        historyCurrentPage = 1;
+        window.renderHistoryPage();
+    } catch(e) {
+        list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
     }
+};
+
+window.renderHistoryPage = () => {
+    const list = document.getElementById('history-list');
+    list.innerHTML = '';
+    
+    // Filter
+    const searchText = document.getElementById('historySearchInput').value.toLowerCase();
+    const filtered = allHistoryData.filter(i => 
+        (i.title && i.title.toLowerCase().includes(searchText)) || 
+        (i.id && i.id.toLowerCase().includes(searchText))
+    );
+
+    // Pagination
+    const totalPages = Math.ceil(filtered.length / historyItemsPerPage);
+    if(historyCurrentPage > totalPages) historyCurrentPage = totalPages || 1;
+    
+    const start = (historyCurrentPage - 1) * historyItemsPerPage;
+    const end = start + historyItemsPerPage;
+    const pageItems = filtered.slice(start, end);
+
+    // Controls
+    const controls = document.createElement('li');
+    controls.style.cssText = "display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; background:#1e1e1e; padding:10px; border-bottom:1px solid #333; z-index:10; margin-bottom:10px;";
+    controls.innerHTML = `
+        <button class="btn btn-dark" ${historyCurrentPage<=1?'disabled':''} onclick="window.changeHistoryPage(-1)">◀ ย้อน</button>
+        <span style="color:#aaa; font-size:0.9em;">หน้า ${historyCurrentPage} / ${totalPages || 1} (ทั้งหมด ${filtered.length})</span>
+        <button class="btn btn-dark" ${historyCurrentPage>=totalPages?'disabled':''} onclick="window.changeHistoryPage(1)">ถัดไป ▶</button>
+    `;
+    list.appendChild(controls);
+
+    if(pageItems.length === 0) {
+        const empty = document.createElement('li');
+        empty.innerHTML = `<div style="text-align:center; padding:20px; color:#555;">ไม่พบรายการ</div>`;
+        list.appendChild(empty);
+        return;
+    }
+
+    pageItems.forEach(i => {
+        const li = document.createElement('li'); 
+        li.className = 'history-item';
+        li.innerHTML = `<div><span class="hist-date">${formatThaiDate(i.timestamp||0)}</span> ${i.title||i.id}</div> <button class="btn btn-dark" onclick="window.deleteHistory('${i.id}')">🗑️</button>`;
+        li.querySelector('div').onclick = () => { window.closeHistory(); document.getElementById('vidInput').value = i.id; window.toggleConnection(); };
+        list.appendChild(li);
+    });
+};
+
+window.changeHistoryPage = (delta) => {
+    historyCurrentPage += delta;
+    window.renderHistoryPage();
+};
+
+window.filterHistory = () => {
+    historyCurrentPage = 1;
+    window.renderHistoryPage();
+};
+
+window.deleteHistory = (vid) => { 
+    Swal.fire({title:'ลบประวัติ?', showCancelButton:true}).then(r=>{ 
+        if(r.isConfirmed) remove(ref(db, 'history/'+vid)).then(() => window.loadHistoryList()); 
+    }); 
 };
 
 window.handleStockClick = (num) => {
@@ -743,7 +900,7 @@ window.doAction = (num, action) => {
     Swal.close();
     if (action === 'edit') { Swal.fire({input: 'text', inputValue: stockData[num].owner, title: 'แก้ไขชื่อ (เฉพาะรายการนี้)'}).then(r => { if (r.value) { update(ref(db, `stock/${currentVideoId}/${num}`), {owner: r.value}); } }); } 
     else if (action === 'price') Swal.fire({input: 'number'}).then(r => { if(r.value) update(ref(db, `stock/${currentVideoId}/${num}`), {price: r.value}); });
-    else if (action === 'cancel') processCancel(num, `แอดมินลบรายการที่ ${num} ค่ะ`); // Modified: Speak manual cancellation
+    else if (action === 'cancel') processCancel(num, `แอดมินลบรายการที่ ${num} ค่ะ`); 
 };
 
 window.fixDatabase = async () => {
@@ -802,25 +959,6 @@ window.toggleSimulation = () => {
     } else { menu.innerText = "⚡ เริ่มจำลองแชท"; clearInterval(simIntervalId); }
 };
 
-window.openHistory = () => { document.getElementById('history-modal').style.display = 'flex'; loadHistoryList(); };
-window.closeHistory = () => { document.getElementById('history-modal').style.display = 'none'; };
-async function loadHistoryList() {
-    const list = document.getElementById('history-list'); list.innerHTML = 'Loading...';
-    const snapshot = await get(ref(db, 'history'));
-    list.innerHTML = ''; const items = []; 
-    snapshot.forEach(c => items.push({ id: c.key, ...c.val() }));
-    items.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
-    
-    const displayItems = items.slice(0, 100); 
-
-    displayItems.forEach(i => {
-        const li = document.createElement('li'); li.className = 'history-item';
-        li.innerHTML = `<div><span class="hist-date">${formatThaiDate(i.timestamp||0)}</span> ${i.title||i.id}</div> <button class="btn btn-dark" onclick="window.deleteHistory('${i.id}')">🗑️</button>`;
-        li.querySelector('div').onclick = () => { window.closeHistory(); document.getElementById('vidInput').value = i.id; window.toggleConnection(); };
-        list.appendChild(li);
-    });
-}
-window.deleteHistory = (vid) => { Swal.fire({title:'ลบประวัติ?', showCancelButton:true}).then(r=>{ if(r.isConfirmed) remove(ref(db, 'history/'+vid)).then(()=>loadHistoryList()); }); };
 window.openDashboard = () => { document.getElementById('dashboard').style.display = 'flex'; window.renderDashboardTable(); };
 window.closeDashboard = () => { document.getElementById('dashboard').style.display = 'none'; };
 
@@ -909,6 +1047,7 @@ remove(ref(db, 'stock/demo'));
 
 onAuthStateChanged(auth, user => {
     if (user) {
+        initTooltips(); // Init tooltips on start
         onValue(ref(db, 'system/stockSize'), s => { 
             const val = s.val() || 70;
             document.getElementById('stockSize').value = val;
