@@ -18,30 +18,8 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
-// --- SWAL CONFIG (FIXED) ---
-// Base configuration to prevent scroll jumping
-const ModalSwal = Swal.mixin({
-    heightAuto: false,
-    scrollbarPadding: false
-});
-// Global override
-window.Swal = ModalSwal;
-
-// Toast configuration (Explicitly enable heightAuto to fix warning)
-const Toast = Swal.mixin({
-    toast: true,
-    position: 'top-end',
-    showConfirmButton: false,
-    timer: 3000,
-    timerProgressBar: true,
-    heightAuto: true, // Fixes incompatibility warning
-    didOpen: (toast) => {
-        toast.addEventListener('mouseenter', Swal.stopTimer)
-        toast.addEventListener('mouseleave', Swal.resumeTimer)
-    }
-});
-
-// --- GLOBAL STATE ---
+// --- GLOBAL VARIABLES (Moved Up for Safety) ---
+let lastScrollTimestamp = 0; // Fix: Defined at top level
 let currentKeyIdx = 0;
 let isConnected = false;
 let isConnecting = false;
@@ -84,22 +62,40 @@ let allHistoryData = [];
 let historyCurrentPage = 1;
 const historyItemsPerPage = 10;
 
-// --- UTILITIES ---
-function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
-function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
-function updateStatusIcon(id, status) { 
-    const el = document.getElementById(id);
-    if(el) el.className = 'status-item ' + status; 
+// --- AUTO CACHE CLEAR SYSTEM ---
+function checkAndReloadVersion() {
+    const localVer = localStorage.getItem('app_version');
+    if (localVer !== AppInfo.version) {
+        console.log(`Version mismatch! Local: ${localVer}, New: ${AppInfo.version}. Reloading...`);
+        localStorage.setItem('app_version', AppInfo.version);
+        // Force reload from server (bypass cache)
+        window.location.reload(true);
+    }
 }
-function setLoading(s) { document.getElementById('btnConnect').disabled = s; }
-function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
-function updateKeyDisplay() { document.getElementById('stat-key').innerText = "🔑 " + (currentKeyIdx + 1); }
+// Run immediately
+checkAndReloadVersion();
 
-function saveHistory(vid, title) { 
-    if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); 
-}
+// --- SWAL CONFIG ---
+const ModalSwal = Swal.mixin({
+    heightAuto: false,
+    scrollbarPadding: false
+});
+window.Swal = ModalSwal;
 
-// --- CORE FUNCTIONS (Moved Up) ---
+const Toast = Swal.mixin({
+    toast: true,
+    position: 'top-end',
+    showConfirmButton: false,
+    timer: 3000,
+    timerProgressBar: true,
+    heightAuto: true,
+    didOpen: (toast) => {
+        toast.addEventListener('mouseenter', Swal.stopTimer)
+        toast.addEventListener('mouseleave', Swal.resumeTimer)
+    }
+});
+
+// --- CORE FUNCTIONS ---
 function initVersionControl() {
     const badge = document.querySelector('.version-badge');
     if (badge) {
@@ -114,6 +110,7 @@ function syncAiCommanderStatus() {
     onValue(ref(db, 'system/aiCommander'), (snap) => {
         const commanderId = snap.val();
         const btn = document.getElementById('btnAICommander');
+        if(!btn) return;
         if (commanderId === myDeviceId) { isAiCommander = true; btn.innerHTML = '🤖 AI: เปิด (Commander)'; btn.className = 'btn btn-ai active'; } 
         else if (commanderId) { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด (เครื่องอื่นคุม)'; btn.className = 'btn btn-ai remote'; } 
         else { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด'; btn.className = 'btn btn-ai inactive'; }
@@ -136,6 +133,21 @@ function initTooltips() {
     }
     const histBtn = document.querySelector('button[onclick="window.openHistory()"]');
     if(histBtn) histBtn.title = "ดูประวัติการไลฟ์ย้อนหลัง";
+}
+
+// --- UTILITIES ---
+function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
+function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
+function updateStatusIcon(id, status) { 
+    const el = document.getElementById(id);
+    if(el) el.className = 'status-item ' + status; 
+}
+function setLoading(s) { document.getElementById('btnConnect').disabled = s; }
+function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
+function updateKeyDisplay() { document.getElementById('stat-key').innerText = "🔑 " + (currentKeyIdx + 1); }
+
+function saveHistory(vid, title) { 
+    if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); 
 }
 
 // --- AUDIO FUNCTIONS ---
