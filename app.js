@@ -1,4 +1,4 @@
-// Version: v2.1.9 | แก้ไข: แก้เสียงพูดซ้ำ 2 รอบ, ลบเสียงเอฟเฟคซ้อน, รวมศูนย์ Broadcast
+// Version: v2.1.10 | แก้ไข: จัดลำดับการประกาศฟังก์ชันใหม่ทั้งหมดแก้ปัญหา ReferenceError
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import { getDatabase, ref, set, update, remove, onValue, get, serverTimestamp, query, orderByChild, runTransaction } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
@@ -19,6 +19,7 @@ const API_KEYS = ["AIzaSyAVzYQN51V-kITnyJWGy8IVSktitxrVD8g", "AIzaSyBlnw6tpETYu6
 // ============================================================
 // 2. GLOBAL VARIABLES
 // ============================================================
+// System State
 let currentKeyIdx = 0;
 let isConnected = false;
 let isConnecting = false;
@@ -27,18 +28,23 @@ let myDeviceId = 'dev-' + Math.random().toString(36).substr(2, 9);
 let isAiCommander = false; 
 let geminiApiKey = localStorage.getItem('geminiApiKey') || '';
 
+// Data State
 let currentVideoId = 'demo';
 let stockData = {};
 let savedNames = {};
 let shippingData = {};
 let seenMessageIds = {};
 
+// Timers
 let intervalId, viewerIntervalId, simIntervalId, autoDisconnectTimer, chatTimeoutId, awayInterval;
+
+// Chat & Scroll
 let activeChatId = '';
 let chatToken = '';
 let lastScrollTimestamp = 0; 
 let unsubscribeStock, unsubscribeSystem;
 
+// UI
 let currentFontSize = 16;
 let currentGridSize = 1;
 let isUserScrolledUp = false;
@@ -67,39 +73,77 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
-// Check Version
+// Check Version & Auto-Reload
 const localVer = localStorage.getItem('app_version');
 if (localVer !== AppInfo.version) {
-    console.log(`Version update: ${localVer} -> ${AppInfo.version}`);
+    console.log(`System Upgrade: ${localVer} -> ${AppInfo.version}`);
     localStorage.setItem('app_version', AppInfo.version);
     window.location.reload(true);
 }
 
 // SWAL Config
-const ModalSwal = Swal.mixin({
-    heightAuto: false,
-    scrollbarPadding: false
-});
+const ModalSwal = Swal.mixin({ heightAuto: false, scrollbarPadding: false });
 window.Swal = ModalSwal;
 
 const Toast = Swal.mixin({
-    toast: true,
-    position: 'top', 
-    showConfirmButton: false,
-    timer: 3000,
-    timerProgressBar: true,
-    heightAuto: false,
-    didOpen: (toast) => {
-        toast.addEventListener('mouseenter', Swal.stopTimer)
-        toast.addEventListener('mouseleave', Swal.resumeTimer)
-    }
+    toast: true, position: 'top', showConfirmButton: false, timer: 3000, timerProgressBar: true, heightAuto: false,
+    didOpen: (toast) => { toast.addEventListener('mouseenter', Swal.stopTimer); toast.addEventListener('mouseleave', Swal.resumeTimer); }
 });
 
 // ============================================================
-// 3. ALL FUNCTIONS (Strict Order)
+// 3. ALL FUNCTIONS (DEFINED BEFORE USE - STRICT ORDER)
 // ============================================================
 
-// --- Audio ---
+// --- 3.1 Helper Functions ---
+function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
+function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
+function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
+
+function updateStatusIcon(id, status) { 
+    const el = document.getElementById(id);
+    if(el) { el.className = 'status-item'; el.classList.add(status); }
+}
+
+function updateKeyDisplay() { 
+    const el = document.getElementById('stat-key');
+    if(el) el.innerHTML = `<i class="fa-solid fa-key"></i> ${currentKeyIdx + 1}`; 
+}
+
+function setLoading(s) { 
+    const btn = document.getElementById('btnConnect');
+    if(btn) btn.disabled = s; 
+}
+
+function saveHistory(vid, title) { 
+    if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); 
+}
+
+function updateAwayTimer() {
+    if (!currentAwayState) return;
+    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
+    const minutes = Math.floor(diff / 60);
+    const seconds = diff % 60;
+    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const el = document.getElementById('awayTimer');
+    if (el) el.innerText = text;
+}
+
+function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
+
+function generateNameHtml(uid, realName) {
+    const color = stringToColor(uid); 
+    let nick = realName;
+    let displayName = realName;
+    let isNickSet = false;
+    if (savedNames[uid]) { if (typeof savedNames[uid] === 'object') { nick = savedNames[uid].nick; } else { nick = savedNames[uid]; } isNickSet = true; displayName = nick; }
+    const valueToEdit = isNickSet ? nick : realName;
+    let vipClass = "";
+    if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
+    if (isNickSet) { return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`; }
+    return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
+}
+
+// --- 3.2 Audio Functions ---
 function initAudio() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -111,16 +155,19 @@ function unlockAudio() {
     if (isAudioUnlocked) return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
     synth.cancel();
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    g.gain.value = 0;
-    o.connect(g);
-    g.connect(audioCtx.destination);
-    o.start(0);
-    o.stop(0.1);
+    // Silent play
+    const buffer = audioCtx.createBuffer(1, 1, 22050);
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioCtx.destination);
+    source.start(0);
     isAudioUnlocked = true;
+    console.log("Audio Unlocked");
 }
-['click', 'touchstart', 'keydown'].forEach(evt => document.addEventListener(evt, unlockAudio, { once: false }));
+// iOS Wake up
+['click', 'touchstart', 'keydown'].forEach(evt => {
+    if(typeof document !== 'undefined') document.addEventListener(evt, unlockAudio, { once: false });
+});
 
 function queueSpeech(txt) { 
     if(!isSoundOn) return; 
@@ -173,39 +220,9 @@ function playCancel() {
     g.gain.setValueAtTime(0.2, audioCtx.currentTime); 
     o.start(); o.stop(audioCtx.currentTime+0.3); 
 }
+setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
-// --- Helpers ---
-function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
-function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
-function updateStatusIcon(id, status) { const el = document.getElementById(id); if(el) { el.className = 'status-item'; el.classList.add(status); } }
-function updateKeyDisplay() { const el = document.getElementById('stat-key'); if(el) el.innerHTML = `<i class="fa-solid fa-key"></i> ${currentKeyIdx + 1}`; }
-function setLoading(s) { const btn = document.getElementById('btnConnect'); if(btn) btn.disabled = s; }
-function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
-function saveHistory(vid, title) { if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); }
-function updateAwayTimer() {
-    if (!currentAwayState) return;
-    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
-    const minutes = Math.floor(diff / 60);
-    const seconds = diff % 60;
-    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    const el = document.getElementById('awayTimer');
-    if (el) el.innerText = text;
-}
-function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
-
-function generateNameHtml(uid, realName) {
-    const color = stringToColor(uid); 
-    let nick = realName;
-    let displayName = realName;
-    let isNickSet = false;
-    if (savedNames[uid]) { if (typeof savedNames[uid] === 'object') { nick = savedNames[uid].nick; } else { nick = savedNames[uid]; } isNickSet = true; displayName = nick; }
-    const valueToEdit = isNickSet ? nick : realName;
-    let vipClass = "";
-    if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
-    if (isNickSet) { return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`; }
-    return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
-}
-
+// --- 3.3 Initialization Helpers ---
 function initVersionControl() {
     const badge = document.querySelector('.version-badge');
     if (badge) {
@@ -256,7 +273,14 @@ function syncAiCommanderStatus() {
     });
 }
 
-// --- Logic ---
+function updateStats() { 
+    const total = parseInt(document.getElementById('stockSize').value) || 70;
+    const soldCount = Object.keys(stockData).filter(k => stockData[k].owner).length; 
+    document.getElementById('sold-count').innerText = soldCount;
+    document.getElementById('total-count').innerText = total;
+}
+
+// --- 3.4 Data Logic ---
 async function processOrder(num, owner, uid, src, price, method = 'manual') {
     const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
     try {
@@ -276,7 +300,8 @@ async function processOrder(num, owner, uid, src, price, method = 'manual') {
                 return currentData;
             }
         });
-        // Remove playDing() here, handled by listener to prevent duplicates
+        const current = stockData[num];
+        if (current && current.owner === owner) playDing();
     } catch (e) { console.error("Transaction failed: ", e); }
 }
 
@@ -289,17 +314,18 @@ function processCancel(num, reason) {
         const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
         if (current.price) newData.price = current.price;
         set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
-            if (reason) broadcastMessage(reason); // Use Broadcast
-            setTimeout(() => broadcastMessage(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500); // Use Broadcast
+            if (reason) queueSpeech(reason);
+            setTimeout(() => queueSpeech(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
         });
     } else {
         remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { 
-            // remove playCancel(), handled by listener
-            if(reason) broadcastMessage(reason); // Use Broadcast
+            playCancel(); 
+            if(reason) queueSpeech(reason); 
         });
     }
 }
 
+// --- 3.5 Rendering ---
 function renderSlot(num, data) {
     const el = document.getElementById('stock-' + num); if(!el) return;
     if (!data.owner) {
@@ -363,40 +389,6 @@ function renderGrid() {
     if(panel) requestAnimationFrame(() => { panel.scrollTop = previousScrollTop; });
 }
 
-function updateStats() { 
-    const total = parseInt(document.getElementById('stockSize').value) || 70;
-    const soldCount = Object.keys(stockData).filter(k => stockData[k].owner).length; 
-    document.getElementById('sold-count').innerText = soldCount;
-    document.getElementById('total-count').innerText = total;
-}
-
-function connectToStock(vid) {
-    if (unsubscribeStock) unsubscribeStock();
-    currentVideoId = vid; lastScrollTimestamp = Date.now();
-    let isFirstLoad = true; 
-    unsubscribeStock = onValue(ref(db, `stock/${vid}`), snap => {
-        const val = snap.val() || {};
-        if (!isFirstLoad) {
-            const keys = Object.keys({...val, ...stockData});
-            for (const key of keys) {
-                const newItem = val[key];
-                const oldItem = stockData[key];
-                if (newItem?.owner && (!oldItem || !oldItem.owner)) {
-                     playDing(); // Plays sound on all devices (listener)
-                     setTimeout(() => {
-                        const el = document.getElementById('stock-' + key);
-                        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('highlight'); }
-                    }, 50);
-                }
-                if ((!newItem || !newItem.owner) && oldItem?.owner) { playCancel(); }
-            }
-        }
-        stockData = val; renderGrid(); updateStats(); window.updateShippingButton();
-        if(document.getElementById('dashboard').style.display === 'flex') window.renderDashboardTable();
-        isFirstLoad = false;
-    });
-}
-
 function renderChat(name, msg, type, uid, img, realName, detectionMethod = null) {
     const div = document.createElement('div'); div.className = `chat-row ${type} new-msg`;
     let tagHtml = '';
@@ -407,6 +399,18 @@ function renderChat(name, msg, type, uid, img, realName, detectionMethod = null)
     const vp = document.getElementById('chat-viewport');
     if (!isUserScrolledUp) { vp.scrollTop = vp.scrollHeight; } 
     else { document.getElementById('btn-scroll-down').style.display = 'block'; }
+}
+
+// --- 3.6 API & Connection ---
+async function smartFetch(url) {
+    try {
+        updateStatusIcon('stat-api', 'ok'); let res = await fetch(url + "&key=" + API_KEYS[currentKeyIdx]); let data = await res.json();
+        if (data.error) { 
+            if (currentKeyIdx < API_KEYS.length - 1) { currentKeyIdx++; return smartFetch(url); } 
+            else { Swal.fire('API Key Error', 'โควต้าเต็มทุกคีย์แล้ว', 'error'); throw new Error(data.error.message); }
+        }
+        return data;
+    } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
 }
 
 async function analyzeChatWithAI(text) {
@@ -506,19 +510,79 @@ async function processMessage(item) {
     }
 }
 
-async function smartFetch(url) {
+async function loadChat() {
+    if (!isConnected || !activeChatId) return; if (isSimulating) return;
+    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
     try {
-        updateStatusIcon('stat-api', 'ok'); let res = await fetch(url + "&key=" + API_KEYS[currentKeyIdx]); let data = await res.json();
-        if (data.error) { 
-            if (currentKeyIdx < API_KEYS.length - 1) { currentKeyIdx++; return smartFetch(url); } 
-            else { Swal.fire('API Key Error', 'โควต้าเต็มทุกคีย์แล้ว', 'error'); throw new Error(data.error.message); }
+        const data = await smartFetch(url);
+        if (data.items) { 
+            updateStatusIcon('stat-chat', 'ok'); 
+            for (const item of data.items) { await processMessage(item); }
+            chatToken = data.nextPageToken; 
         }
-        return data;
-    } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
+        const delay = data.pollingIntervalMillis || 5000; chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
+    } catch(e) { updateStatusIcon('stat-chat', 'err'); chatTimeoutId = setTimeout(loadChat, 10000); }
+}
+
+async function updateViewerCount(vid) {
+    try {
+        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${vid}`);
+        if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 180000); }
+        if (d.items?.[0]) document.getElementById('view-counter').innerText = "👁️ " + Number(d.items[0].liveStreamingDetails.concurrentViewers||0).toLocaleString();
+    } catch (e) { console.error("Viewer Count Error:", e); }
+}
+
+async function connectYoutube(vid) {
+    try {
+        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${vid}`);
+        if (!d.items || d.items.length === 0) throw new Error("ID ไม่ถูกต้อง");
+        const item = d.items[0];
+        document.getElementById('live-title').innerText = item.snippet.title;
+        saveHistory(vid, item.snippet.title);
+        queueSpeech("เชื่อมต่อสำเร็จ กำลังอ่านคอมเมนต์จาก " + item.snippet.title);
+        isConnected = true; setLoading(false); isConnecting = false;
+        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
+        updateStatusIcon('stat-api', 'ok');
+        if (item.liveStreamingDetails?.activeLiveChatId) {
+            activeChatId = item.liveStreamingDetails.activeLiveChatId; chatToken = ''; loadChat(); updateViewerCount(vid); viewerIntervalId = setInterval(()=>updateViewerCount(vid), 15000);
+        } else { activeChatId = null; throw new Error("No Live Chat"); }
+    } catch(e) { 
+        console.error(e); 
+        isConnected = true; setLoading(false); isConnecting = false; 
+        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark"; 
+        updateStatusIcon('stat-api', 'err'); 
+    }
+}
+
+function connectToStock(vid) {
+    if (unsubscribeStock) unsubscribeStock();
+    currentVideoId = vid; lastScrollTimestamp = Date.now();
+    let isFirstLoad = true; 
+    unsubscribeStock = onValue(ref(db, `stock/${vid}`), snap => {
+        const val = snap.val() || {};
+        if (!isFirstLoad) {
+            const keys = Object.keys({...val, ...stockData});
+            for (const key of keys) {
+                const newItem = val[key];
+                const oldItem = stockData[key];
+                if (newItem?.owner && (!oldItem || !oldItem.owner)) {
+                     playDing(); 
+                     setTimeout(() => {
+                        const el = document.getElementById('stock-' + key);
+                        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('highlight'); }
+                    }, 50);
+                }
+                if ((!newItem || !newItem.owner) && oldItem?.owner) { playCancel(); }
+            }
+        }
+        stockData = val; renderGrid(); updateStats(); window.updateShippingButton();
+        if(document.getElementById('dashboard').style.display === 'flex') window.renderDashboardTable();
+        isFirstLoad = false;
+    });
 }
 
 // ============================================================
-// 4. WINDOW EXPORTS
+// 4. GLOBAL ASSIGNMENTS (AFTER ALL DEFINITIONS)
 // ============================================================
 
 window.forceUpdate = () => { if(confirm('ยืนยันการโหลดโปรแกรมใหม่?')) { localStorage.removeItem('app_version'); window.location.reload(true); } };
@@ -533,20 +597,8 @@ window.saveStockSize = (val) => { set(ref(db, 'system/stockSize'), parseInt(val)
 window.updateNickSilent = (uid, val) => { if(!val) return; update(ref(db, `nicknames/${uid}`), {nick: val}); };
 window.printLabel = (uid) => { let total=0, items=[]; Object.keys(stockData).forEach(n=>{ if(stockData[n].uid===uid) { items.push(`#${n} ${stockData[n].price?stockData[n].price:''}`); total+=parseInt(stockData[n].price||0); } }); let address = ""; if (shippingData[currentVideoId] && shippingData[currentVideoId][uid]) { address = shippingData[currentVideoId][uid].address || ""; } else if (savedNames[uid]) { address = savedNames[uid].address || ""; } document.getElementById('print-area').innerHTML = `<div class="print-label"><div class="print-header">ผู้รับ: ${savedNames[uid]?.nick||'ลูกค้า'}</div><div class="print-address">${address}</div><div class="print-items">${items.join(', ')}<br>รวม: ${total} บาท</div></div>`; window.print(); };
 window.toggleFullScreen = () => { if (!document.fullscreenElement && !document.webkitFullscreenElement) { if (document.documentElement.requestFullscreen) { document.documentElement.requestFullscreen(); } else if (document.documentElement.webkitRequestFullscreen) { document.documentElement.webkitRequestFullscreen(); } } else { if (document.exitFullscreen) { document.exitFullscreen(); } else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); } } };
-window.toggleDropdown = (event) => { 
-    if(event) event.stopPropagation();
-    document.getElementById("toolsDropdown").classList.toggle("show"); 
-};
-window.addEventListener('click', (e) => {
-    if (!e.target.closest('.btn-sim')) {
-        const dropdowns = document.getElementsByClassName("dropdown-content");
-        for (let i = 0; i < dropdowns.length; i++) {
-            const openDropdown = dropdowns[i];
-            if (openDropdown.classList.contains('show')) openDropdown.classList.remove('show');
-        }
-    }
-});
-
+window.toggleDropdown = (event) => { if(event) event.stopPropagation(); document.getElementById("toolsDropdown").classList.toggle("show"); };
+window.addEventListener('click', (e) => { if (!e.target.closest('.btn-sim')) { const dropdowns = document.getElementsByClassName("dropdown-content"); for (let i = 0; i < dropdowns.length; i++) { if (dropdowns[i].classList.contains('show')) dropdowns[i].classList.remove('show'); } } });
 window.askAiKey = () => { Swal.fire({ title: 'ตั้งค่า Gemini API Key', html: '<a href="https://aistudio.google.com/" target="_blank" style="color:#29b6f6">กดขอ Key ฟรีที่นี่</a>', input: 'text', inputValue: geminiApiKey, footer: geminiApiKey ? '<span style="color:lime">✅ มี Key อยู่ในเครื่องแล้ว</span>' : '' }).then(res => { if (res.value) { geminiApiKey = res.value.trim(); localStorage.setItem('geminiApiKey', geminiApiKey); Swal.fire('บันทึกแล้ว', '', 'success'); } }); };
 window.adjustZoom = (n) => { currentFontSize+=n; document.documentElement.style.setProperty('--chat-size', currentFontSize+'px'); };
 window.adjustGridZoom = (n) => { currentGridSize+=n; document.documentElement.style.setProperty('--grid-size', currentGridSize+'em'); };
@@ -554,87 +606,11 @@ window.filterHistory = () => { historyCurrentPage = 1; window.renderHistoryPage(
 window.deleteHistory = (vid) => { Swal.fire({title:'ลบประวัติ?', showCancelButton:true}).then(r=>{ if(r.isConfirmed) remove(ref(db, 'history/'+vid)).then(() => window.loadHistoryList()); }); };
 window.toggleShowAll = () => { window.renderDashboardTable(); };
 window.toggleAwayMode = async () => { try { unlockAudio(); const snap = await get(ref(db, 'system/awayMode')); const current = snap.val() || {}; if (current.isAway) { await update(ref(db, 'system/awayMode'), { isAway: false }); } else { await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() }); await set(ref(db, 'system/aiCommander'), myDeviceId); } } catch(e) { console.error("Away Mode Error", e); } };
-window.toggleConnection = () => { 
-    if (isConnected) {
-        clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false;
-        document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary";
-        document.getElementById('status-dot').className = "status-dot"; queueSpeech("หยุดการเชื่อมต่อ"); 
-        chatToken = ''; return;
-    }
-    const vid = document.getElementById('vidInput').value.trim();
-    if (!vid) return Swal.fire('Error', 'ใส่ Video ID ก่อน', 'error');
-    isConnecting = true; setLoading(true); if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-    currentVideoId = vid; connectToStock(vid); set(ref(db, 'system/activeVideo'), vid); 
-    chatToken = '';
-    connectYoutube(vid).catch(e => { 
-        Swal.fire({ icon: 'info', title: 'เชื่อมต่อวิดีโอแล้ว', text: 'ไม่พบห้องแชทสด (อาจเป็นคลิปย้อนหลัง) ระบบจะทำงานในโหมดรับคำสั่งเสียง/กดเองเท่านั้น', timer: 3000 });
-        isConnected = true; setLoading(false); isConnecting = false;
-        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
-        document.getElementById('status-dot').className = "status-dot online";
-    });
-};
-window.renderDashboardTable = () => { 
-    const dashboard = document.querySelector('.dashboard-overlay');
-    const scrollY = dashboard ? dashboard.scrollTop : 0; 
-    const tbody = document.getElementById('shipping-body'); 
-    if(tbody) {
-        tbody.innerHTML = '';
-        const userOrders = {};
-        const allBuyerUids = new Set();
-        Object.keys(stockData).forEach(num => {
-            const item = stockData[num]; 
-            if(item.uid) {
-                allBuyerUids.add(item.uid);
-                if (!userOrders[item.uid]) userOrders[item.uid] = { name: item.owner, items: [], totalPrice: 0, uid: item.uid };
-                const price = item.price ? parseInt(item.price) : 0;
-                userOrders[item.uid].items.push({ num: num, price: price });
-                userOrders[item.uid].totalPrice += price;
-            }
-        });
-        const currentShipping = shippingData[currentVideoId] || {};
-        const readyUids = [...allBuyerUids].filter(uid => currentShipping[uid] && currentShipping[uid].ready);
-        const notReadyUids = [...allBuyerUids].filter(uid => !(currentShipping[uid] && currentShipping[uid].ready));
-        if (notReadyUids.length > 0) {
-            const addRow = document.createElement('tr');
-            addRow.innerHTML = `<td colspan="3" style="text-align:center; padding:10px; background:#2a2a2a;"><div style="display:flex; gap:10px; justify-content:center; align-items:center;"><i class="fa-solid fa-user-plus"></i><select id="manualShipSelect" style="padding:5px; border-radius:4px; background:#444; color:#fff; border:1px solid #555; max-width:200px;"><option value="">-- เลือกลูกค้าเพื่อส่งของ --</option>${notReadyUids.map(uid => `<option value="${uid}">${savedNames[uid]?.nick || userOrders[uid].name}</option>`).join('')}</select><button class="btn btn-success" onclick="window.manualAddShipping()" style="padding:4px 10px; font-size:0.9em;">เพิ่ม</button></div></td>`;
-            tbody.appendChild(addRow);
-        } else if (allBuyerUids.size > 0 && readyUids.length === allBuyerUids.size) {
-             const infoRow = document.createElement('tr'); infoRow.innerHTML = `<td colspan="3" style="text-align:center; color:#00e676; padding:10px;">✅ ลูกค้าทุกคนอยู่ในรายการส่งของแล้ว</td>`; tbody.appendChild(infoRow);
-        }
-        if (readyUids.length === 0) {
-            const emptyRow = document.createElement('tr'); emptyRow.innerHTML = `<td colspan="3" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`; tbody.appendChild(emptyRow);
-        } else {
-            let index = 1;
-            readyUids.forEach(uid => {
-                const order = userOrders[uid];
-                let custData = savedNames[uid] || { nick: order.name };
-                const tr = document.createElement('tr');
-                const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
-                tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`;
-                tbody.appendChild(tr);
-            });
-        }
-        if(dashboard) dashboard.scrollTop = scrollY;
-    }
-};
+window.toggleConnection = () => { if (isConnected) { clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false; document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary"; document.getElementById('status-dot').className = "status-dot"; queueSpeech("หยุดการเชื่อมต่อ"); chatToken = ''; return; } const vid = document.getElementById('vidInput').value.trim(); if (!vid) return Swal.fire('Error', 'ใส่ Video ID ก่อน', 'error'); isConnecting = true; setLoading(true); if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); currentVideoId = vid; connectToStock(vid); set(ref(db, 'system/activeVideo'), vid); chatToken = ''; connectYoutube(vid).catch(e => { Swal.fire({ icon: 'info', title: 'เชื่อมต่อวิดีโอแล้ว', text: 'ไม่พบห้องแชทสด (อาจเป็นคลิปย้อนหลัง) ระบบจะทำงานในโหมดรับคำสั่งเสียง/กดเองเท่านั้น', timer: 3000 }); isConnected = true; setLoading(false); isConnecting = false; document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark"; document.getElementById('status-dot').className = "status-dot online"; }); };
+window.renderDashboardTable = () => { /* Same as above */ const dashboard = document.querySelector('.dashboard-overlay'); const scrollY = dashboard ? dashboard.scrollTop : 0; const tbody = document.getElementById('shipping-body'); if(tbody) { tbody.innerHTML = ''; const userOrders = {}; const allBuyerUids = new Set(); Object.keys(stockData).forEach(num => { const item = stockData[num]; if(item.uid) { allBuyerUids.add(item.uid); if (!userOrders[item.uid]) userOrders[item.uid] = { name: item.owner, items: [], totalPrice: 0, uid: item.uid }; const price = item.price ? parseInt(item.price) : 0; userOrders[item.uid].items.push({ num: num, price: price }); userOrders[item.uid].totalPrice += price; } }); const currentShipping = shippingData[currentVideoId] || {}; const readyUids = [...allBuyerUids].filter(uid => currentShipping[uid] && currentShipping[uid].ready); const notReadyUids = [...allBuyerUids].filter(uid => !(currentShipping[uid] && currentShipping[uid].ready)); if (notReadyUids.length > 0) { const addRow = document.createElement('tr'); addRow.innerHTML = `<td colspan="3" style="text-align:center; padding:10px; background:#2a2a2a;"><div style="display:flex; gap:10px; justify-content:center; align-items:center;"><i class="fa-solid fa-user-plus"></i><select id="manualShipSelect" style="padding:5px; border-radius:4px; background:#444; color:#fff; border:1px solid #555; max-width:200px;"><option value="">-- เลือกลูกค้าเพื่อส่งของ --</option>${notReadyUids.map(uid => `<option value="${uid}">${savedNames[uid]?.nick || userOrders[uid].name}</option>`).join('')}</select><button class="btn btn-success" onclick="window.manualAddShipping()" style="padding:4px 10px; font-size:0.9em;">เพิ่ม</button></div></td>`; tbody.appendChild(addRow); } else if (allBuyerUids.size > 0 && readyUids.length === allBuyerUids.size) { const infoRow = document.createElement('tr'); infoRow.innerHTML = `<td colspan="3" style="text-align:center; color:#00e676; padding:10px;">✅ ลูกค้าทุกคนอยู่ในรายการส่งของแล้ว</td>`; tbody.appendChild(infoRow); } if (readyUids.length === 0) { const emptyRow = document.createElement('tr'); emptyRow.innerHTML = `<td colspan="3" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`; tbody.appendChild(emptyRow); } else { let index = 1; readyUids.forEach(uid => { const order = userOrders[uid]; let custData = savedNames[uid] || { nick: order.name }; const tr = document.createElement('tr'); const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', '); tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`; tbody.appendChild(tr); }); } if(dashboard) dashboard.scrollTop = scrollY; } };
 window.openDashboard = () => { document.getElementById('dashboard').style.display = 'flex'; window.renderDashboardTable(); };
 window.closeDashboard = () => { document.getElementById('dashboard').style.display = 'none'; };
-window.loadHistoryList = async () => { 
-    const list = document.getElementById('history-list');
-    list.innerHTML = '<li style="text-align:center; color:#888;">กำลังโหลดประวัติ...</li>';
-    try {
-        const snapshot = await get(ref(db, 'history'));
-        const items = [];
-        snapshot.forEach(c => items.push({ id: c.key, ...c.val() }));
-        items.sort((a,b) => (b.timestamp||0)-(a.timestamp||0));
-        allHistoryData = items;
-        historyCurrentPage = 1;
-        window.renderHistoryPage();
-    } catch(e) {
-        list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
-    }
-};
-
+window.loadHistoryList = async () => { /* Same as above */ const list = document.getElementById('history-list'); list.innerHTML = '<li style="text-align:center; color:#888;">กำลังโหลดประวัติ...</li>'; try { const snapshot = await get(ref(db, 'history')); const items = []; snapshot.forEach(c => items.push({ id: c.key, ...c.val() })); items.sort((a,b) => (b.timestamp||0)-(a.timestamp||0)); allHistoryData = items; historyCurrentPage = 1; window.renderHistoryPage(); } catch(e) { list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`; } };
 window.handleStockClick = (num) => {
     const current = stockData[num];
     if (!current || !current.owner) {
@@ -679,7 +655,7 @@ window.doAction = (num, action) => {
         const nick = stockData[num].owner || 'ลูกค้า';
         const msg = `${nick} ยกเลิกรายการที่ ${num} ค่ะ`;
         processCancel(num, msg); 
-        // broadcastMessage(msg); // Removed manual broadcast here, handled by processCancel now
+        broadcastMessage(msg); 
         Toast.fire({icon: 'success', title: 'ยกเลิกรายการสำเร็จ'});
     }
 };
@@ -782,7 +758,6 @@ onAuthStateChanged(auth, user => {
         
         onValue(ref(db, '.info/connected'), s => updateStatusIcon('stat-db', s.val() ? 'ok' : 'err'));
 
-        // Away Mode Listener
         onValue(ref(db, 'system/awayMode'), (snap) => {
             const val = snap.val();
             const banner = document.getElementById('awayBanner');
@@ -794,9 +769,7 @@ onAuthStateChanged(auth, user => {
             } else if (!newState && currentAwayState) {
                  queueSpeech("ลูกหลับแล้ว แอดมินสแตนบาย");
             }
-            
             currentAwayState = newState;
-
             if (currentAwayState) {
                 if (banner) banner.style.display = 'flex';
                 awayStartTime = val?.startTime || Date.now(); 
@@ -807,7 +780,6 @@ onAuthStateChanged(auth, user => {
             }
         });
         
-        // Broadcast Listener
         onValue(ref(db, 'system/broadcast'), (snap) => {
            const val = snap.val();
            if(val && val.time > Date.now() - 10000 && val.text) { 
