@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <base target="_top">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Manowzab Command Center V113.27 (Modular System)</title>
+    
+    <!-- Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="header">
+        <!-- Row 1: Controls -->
+        <div class="header-controls">
+            <div class="status-cluster">
+                <span id="stat-db" class="status-item" title="สถานะฐานข้อมูล Firebase">🗄️</span>
+                <span id="stat-api" class="status-item" title="สถานะ YouTube API">☁️</span>
+                <span id="stat-chat" class="status-item" title="สถานะการดึงแชท">📡</span>
+                <span id="stat-key" class="key-indicator" title="API Key ที่ใช้งานอยู่">🔑 1</span>
+            </div>
+            
+            <button class="btn btn-voice" id="btnVoice" onclick="window.toggleVoiceControl()">🎙️</button>
+            <button class="btn btn-ai inactive" id="btnAICommander" onclick="window.toggleAICommander()">🤖 AI: ปิด</button>
+            <button class="btn btn-dark" onclick="window.openHistory()">🕒</button>
+            <button id="btn-shipping" class="btn btn-shipping empty" onclick="window.openDashboard()">🚚 (0)</button>
+            
+            <input type="text" id="vidInput" class="input-id" placeholder="Video ID">
+            <button class="btn btn-primary" id="btnConnect" onclick="window.toggleConnection()">CONNECT</button>
+            
+            <!-- Tools Dropdown -->
+            <div class="dropdown">
+                <button class="btn btn-sim" onclick="window.toggleDropdown()">⚡ Tools <i class="fa-solid fa-caret-down"></i></button>
+                <div id="toolsDropdown" class="dropdown-content">
+                    <a onclick="window.testVoice()">🔊 ทดสอบเสียง</a>
+                    <a onclick="window.toggleFullScreen()">📺 เต็มจอ (iPad)</a>
+                    <a onclick="window.toggleAwayMode()">🌙 โหมดพาลูกนอน</a>
+                    <a onclick="window.toggleSimulation()" id="menuSim">⚡ เริ่มจำลองแชท</a>
+                    <a onclick="window.askAiKey()">🔑 ตั้งค่า API Key</a>
+                    <a onclick="window.fixDatabase()">🔧 ซ่อมข้อมูล/จัดระเบียบ</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Row 2: Live Info -->
+        <div class="header-info">
+            <div class="status-dot" id="status-dot"></div>
+            <div class="live-viewers" id="view-counter">👁️ 0</div>
+            <div class="live-title" id="live-title">Offline Mode</div>
+            <div class="version-badge" style="margin-left: auto;">V113.27 (Modular)</div>
+        </div>
+    </div>
+
+    <div id="awayBanner" class="away-banner">
+        <span>🌙 แอดมินพาลูกนอน</span>
+        <span id="awayTimer" class="away-timer">00:00</span>
+        <button class="away-btn" onclick="window.toggleAwayMode()">กลับมาแล้ว</button>
+    </div>
+
+    <div class="main-container">
+        <!-- Stock Panel -->
+        <div class="stock-panel" id="stockPanel">
+            <div class="stock-header">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <input type="number" id="stockSize" value="70" style="width:60px; background:#333; border:none; color:white; text-align:center; border-radius:4px; padding:5px;" onchange="window.saveStockSize(this.value)">
+                    <span style="font-size:0.8em; color:#aaa;">รายการ</span>
+                    <button class="btn btn-dark" onclick="window.adjustGridZoom(-0.1)">-</button>
+                    <button class="btn btn-dark" onclick="window.adjustGridZoom(0.1)">+</button>
+                </div>
+                <div class="stock-stats">จอง <span id="sold-count" class="stat-sold">0</span> / <span id="total-count">70</span></div>
+                <button class="btn btn-dark" onclick="window.clearAllStock()">🗑️ ล้าง</button>
+            </div>
+            <div class="stock-grid" id="stockGrid"></div>
+        </div>
+
+        <!-- Chat Panel -->
+        <div class="chat-panel">
+            <div class="tools-bar">
+                <button class="btn btn-mute active" id="btnSound" onclick="window.toggleSound()">🔊 เสียง: เปิด</button>
+                <button class="btn btn-dark" onclick="window.resetVoice()">🔇 Reset</button>
+                <div style="margin-left:auto; display:flex; gap:2px;">
+                    <button class="btn btn-dark" onclick="window.adjustZoom(-2)">A-</button>
+                    <button class="btn btn-dark" onclick="window.adjustZoom(2)">A+</button>
+                </div>
+            </div>
+            <div id="chat-viewport"><div id="chat-list"></div></div>
+            <button id="btn-scroll-down" class="scroll-bottom-btn" onclick="window.scrollToBottom()">⬇️ แชทใหม่</button>
+        </div>
+
+        <!-- Hidden Elements -->
+        <div id="dashboard" class="dashboard-overlay">
+            <div class="dashboard-header"><div class="dash-title">🚚 คิวจัดส่ง (รอบปัจจุบัน)</div><button class="btn btn-dark" onclick="window.closeDashboard()">ปิด</button></div>
+            <div style="overflow-x:auto;"><table class="shipping-table"><thead><tr><th>ลำดับ</th><th>ลูกค้า (แก้ไขได้)</th><th>รายการ</th></tr></thead><tbody id="shipping-body"></tbody></table></div>
+        </div>
+        <div id="history-modal" class="dashboard-overlay">
+            <div class="dashboard-header"><div class="dash-title">🕒 ประวัติการไลฟ์</div><button class="btn btn-dark" onclick="window.closeHistory()">ปิด</button></div>
+            <div style="padding: 10px;"><input type="text" id="historySearchInput" class="history-search-box" placeholder="🔍 ค้นหาชื่อไลฟ์..." onkeyup="window.filterHistory()"></div>
+            <div style="overflow-y:auto; flex: 1;"><ul id="history-list" class="history-list"></ul></div>
+        </div>
+    </div>
+    <div id="print-area"></div>
+
+    <!-- Main Logic Script -->
+    <script type="module" src="app.js"></script>
+</body>
+</html>
