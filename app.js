@@ -932,18 +932,27 @@ onAuthStateChanged(auth, user => {
             const banner = document.getElementById('awayBanner');
             const newState = val ? val.isAway : false;
 
-            if (newState !== currentAwayState) {
-                 if (newState) {
-                     queueSpeech("แอดมินพาลูกเข้านอนแล้ว");
-                 } else {
-                     queueSpeech("ลูกหลับแล้ว แอดมินสแตนบาย");
-                 }
-                 currentAwayState = newState;
+            // Trigger Alert on change to TRUE
+            if (newState && !currentAwayState) {
+                 queueSpeech("แอดมินพาลูกเข้านอนแล้ว");
+                 Swal.fire({
+                     title: '🌙 โหมดพาลูกนอนทำงาน',
+                     text: 'แอดมินไม่อยู่หน้าจอ ระบบจะสแตนบาย',
+                     icon: 'info',
+                     timer: 5000,
+                     showConfirmButton: false,
+                     position: 'top-end',
+                     toast: true
+                 });
+            } else if (!newState && currentAwayState) {
+                 queueSpeech("ลูกหลับแล้ว แอดมินสแตนบาย");
             }
+            
+            currentAwayState = newState;
 
             if (currentAwayState) {
                 if (banner) banner.style.display = 'flex';
-                awayStartTime = val.startTime;
+                awayStartTime = val?.startTime || Date.now(); // Safety check
                 if (!awayInterval) {
                      updateAwayTimer(); 
                      awayInterval = setInterval(updateAwayTimer, 1000); 
