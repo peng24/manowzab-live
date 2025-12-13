@@ -18,7 +18,6 @@ const API_KEYS = ["AIzaSyAVzYQN51V-kITnyJWGy8IVSktitxrVD8g", "AIzaSyBlnw6tpETYu6
 // ============================================================
 // 2. GLOBAL VARIABLES
 // ============================================================
-// System State
 let currentKeyIdx = 0;
 let isConnected = false;
 let isConnecting = false;
@@ -27,23 +26,18 @@ let myDeviceId = 'dev-' + Math.random().toString(36).substr(2, 9);
 let isAiCommander = false; 
 let geminiApiKey = localStorage.getItem('geminiApiKey') || '';
 
-// Data State
 let currentVideoId = 'demo';
 let stockData = {};
 let savedNames = {};
 let shippingData = {};
 let seenMessageIds = {};
 
-// Timers
 let intervalId, viewerIntervalId, simIntervalId, autoDisconnectTimer, chatTimeoutId, awayInterval;
-
-// Chat
 let activeChatId = '';
 let chatToken = '';
 let lastScrollTimestamp = 0; 
 let unsubscribeStock, unsubscribeSystem;
 
-// UI State
 let currentFontSize = 16;
 let currentGridSize = 1;
 let isUserScrolledUp = false;
@@ -101,48 +95,10 @@ const Toast = Swal.mixin({
 });
 
 // ============================================================
-// 3. ALL FUNCTIONS (DEFINED FIRST)
+// 3. ALL FUNCTIONS (Declared explicitly to prevent ReferenceError)
 // ============================================================
 
-// --- Helper Functions ---
-function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
-function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
-function updateStatusIcon(id, status) { 
-    const el = document.getElementById(id);
-    if(el) { el.className = 'status-item'; el.classList.add(status); }
-}
-function updateKeyDisplay() { 
-    const el = document.getElementById('stat-key');
-    if(el) el.innerHTML = `<i class="fa-solid fa-key"></i> ${currentKeyIdx + 1}`; 
-}
-function setLoading(s) { const btn = document.getElementById('btnConnect'); if(btn) btn.disabled = s; }
-function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
-function saveHistory(vid, title) { if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); }
-function updateAwayTimer() {
-    if (!currentAwayState) return;
-    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
-    const minutes = Math.floor(diff / 60);
-    const seconds = diff % 60;
-    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    const el = document.getElementById('awayTimer');
-    if (el) el.innerText = text;
-}
-function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
-
-function generateNameHtml(uid, realName) {
-    const color = stringToColor(uid); 
-    let nick = realName;
-    let displayName = realName;
-    let isNickSet = false;
-    if (savedNames[uid]) { if (typeof savedNames[uid] === 'object') { nick = savedNames[uid].nick; } else { nick = savedNames[uid]; } isNickSet = true; displayName = nick; }
-    const valueToEdit = isNickSet ? nick : realName;
-    let vipClass = "";
-    if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
-    if (isNickSet) { return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`; }
-    return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
-}
-
-// --- Audio Functions ---
+// --- Audio System ---
 function initAudio() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -154,7 +110,6 @@ function unlockAudio() {
     if (isAudioUnlocked) return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
     synth.cancel();
-    // Silent play
     const o = audioCtx.createOscillator();
     const g = audioCtx.createGain();
     g.gain.value = 0;
@@ -194,9 +149,13 @@ function playDing() {
     initAudio();
     if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     if(!audioCtx) return;
-    const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.connect(g); g.connect(audioCtx.destination); 
-    o.frequency.setValueAtTime(800, audioCtx.currentTime); o.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime+0.1); 
-    g.gain.setValueAtTime(0.3, audioCtx.currentTime); g.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime+0.1); 
+    const o = audioCtx.createOscillator(); 
+    const g = audioCtx.createGain(); 
+    o.connect(g); g.connect(audioCtx.destination); 
+    o.frequency.setValueAtTime(800, audioCtx.currentTime); 
+    o.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime+0.1); 
+    g.gain.setValueAtTime(0.3, audioCtx.currentTime); 
+    g.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime+0.1); 
     o.start(); o.stop(audioCtx.currentTime+0.1); 
 }
 
@@ -205,55 +164,110 @@ function playCancel() {
     initAudio();
     if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     if(!audioCtx) return;
-    const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.type='sawtooth'; o.connect(g); g.connect(audioCtx.destination); 
-    o.frequency.setValueAtTime(150, audioCtx.currentTime); g.gain.setValueAtTime(0.2, audioCtx.currentTime); 
+    const o = audioCtx.createOscillator(); 
+    const g = audioCtx.createGain(); 
+    o.type='sawtooth'; 
+    o.connect(g); g.connect(audioCtx.destination); 
+    o.frequency.setValueAtTime(150, audioCtx.currentTime); 
+    g.gain.setValueAtTime(0.2, audioCtx.currentTime); 
     o.start(); o.stop(audioCtx.currentTime+0.3); 
 }
-setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
-// --- Core Logic ---
-async function processOrder(num, owner, uid, src, price, method = 'manual') {
-    const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
-    try {
-        await runTransaction(itemRef, (currentData) => {
-            if (currentData === null) {
-                return { owner, uid, time: Date.now(), queue: [], source: method, price: price || null };
-            } else if (!currentData.owner) {
-                currentData.owner = owner; currentData.uid = uid; currentData.time = Date.now(); currentData.source = method;
-                if(price) currentData.price = price; if(!currentData.queue) currentData.queue = [];
-                return currentData;
-            } else {
-                if (currentData.owner === owner) return; 
-                const queue = currentData.queue || [];
-                if (queue.find(q => q.owner === owner)) return; 
-                queue.push({ owner, uid, time: Date.now() });
-                currentData.queue = queue;
-                return currentData;
-            }
-        });
-        const current = stockData[num];
-        if (current && current.owner === owner) playDing();
-    } catch (e) { console.error("Transaction failed: ", e); }
+// --- Helper Functions ---
+function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
+function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
+function updateStatusIcon(id, status) { 
+    const el = document.getElementById(id);
+    if(el) { el.className = 'status-item'; el.classList.add(status); }
+}
+function updateKeyDisplay() { 
+    const el = document.getElementById('stat-key');
+    if(el) el.innerHTML = `<i class="fa-solid fa-key"></i> ${currentKeyIdx + 1}`; 
+}
+function setLoading(s) { const btn = document.getElementById('btnConnect'); if(btn) btn.disabled = s; }
+function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
+function saveHistory(vid, title) { if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); }
+function updateAwayTimer() {
+    if (!currentAwayState) return;
+    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
+    const minutes = Math.floor(diff / 60);
+    const seconds = diff % 60;
+    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const el = document.getElementById('awayTimer');
+    if (el) el.innerText = text;
+}
+function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
+
+function generateNameHtml(uid, realName) {
+    const color = stringToColor(uid); 
+    let nick = realName;
+    let displayName = realName;
+    let isNickSet = false;
+    if (savedNames[uid]) { if (typeof savedNames[uid] === 'object') { nick = savedNames[uid].nick; } else { nick = savedNames[uid]; } isNickSet = true; displayName = nick; }
+    const valueToEdit = isNickSet ? nick : realName;
+    let vipClass = "";
+    if (/admin|แอดมิน/i.test(displayName) || /admin|แอดมิน/i.test(realName)) vipClass = "vip-admin";
+    if (isNickSet) { return `<div><span class="badge-nick ${vipClass}" style="${!vipClass?'background:'+color:''}" data-val="${escapeHtml(valueToEdit)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${displayName}</span> <span class="real-name-sub">(${realName})</span></div>`; }
+    return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
 }
 
-function processCancel(num, reason) {
-    if (!stockData[num]) return;
-    const current = stockData[num];
-    if (current.queue && Array.isArray(current.queue) && current.queue.length > 0) {
-        const next = current.queue[0];
-        const nextQ = current.queue.slice(1);
-        const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
-        if (current.price) newData.price = current.price;
-        set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
-            if (reason) queueSpeech(reason);
-            setTimeout(() => queueSpeech(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
-        });
-    } else {
-        remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { 
-            playCancel(); 
-            if(reason) queueSpeech(reason); 
-        });
+// --- Init Functions ---
+function initVersionControl() {
+    const badge = document.querySelector('.version-badge');
+    if (badge) {
+        badge.innerText = `${AppInfo.version}`;
+        badge.title = `เวอร์ชั่น: ${AppInfo.version} (${AppInfo.releaseDate})\n\n${AppInfo.changelog.join('\n')}`;
     }
+    const toolsDropdown = document.getElementById('toolsDropdown');
+    if (toolsDropdown && !document.getElementById('btnForceUpdate')) {
+        const a = document.createElement('a');
+        a.id = 'btnForceUpdate';
+        a.innerHTML = '<i class="fa-solid fa-rotate"></i> บังคับอัปเดต (Force Update)';
+        a.style.color = '#00e676';
+        a.onclick = () => window.forceUpdate();
+        toolsDropdown.insertBefore(a, toolsDropdown.firstChild);
+    }
+}
+
+function initStatusIcons() {
+    const cluster = document.querySelector('.status-cluster');
+    if(cluster) {
+        cluster.innerHTML = `
+            <span id="stat-db" class="status-item" title="สถานะฐานข้อมูล"><i class="fa-solid fa-database"></i></span>
+            <span id="stat-api" class="status-item" title="สถานะ YouTube API"><i class="fa-brands fa-youtube"></i></span>
+            <span id="stat-chat" class="status-item" title="สถานะการดึงแชท"><i class="fa-solid fa-comments"></i></span>
+            <span id="stat-key" class="key-indicator" title="API Key"><i class="fa-solid fa-key"></i> 1</span>
+        `;
+    }
+}
+
+function initTooltips() {
+    const tips = {
+        'btnVoice': 'สั่งงานด้วยเสียง', 'btnAICommander': 'ระบบ AI ช่วยจอง', 'btn-shipping': 'รายการพร้อมส่ง',
+        'btnConnect': 'เชื่อมต่อ YouTube', 'btnSound': 'เปิด/ปิดเสียง', 'stockSize': 'จำนวนรายการ'
+    };
+    for(const [id, text] of Object.entries(tips)) { const el = document.getElementById(id); if(el) el.title = text; }
+    const histBtn = document.querySelector('button[onclick="window.openHistory()"]');
+    if(histBtn) histBtn.title = "ดูประวัติการไลฟ์ย้อนหลัง";
+}
+
+function syncAiCommanderStatus() {
+    onValue(ref(db, 'system/aiCommander'), (snap) => {
+        const commanderId = snap.val();
+        const btn = document.getElementById('btnAICommander');
+        if(!btn) return;
+        if (commanderId === myDeviceId) { isAiCommander = true; btn.innerHTML = '🤖 AI: เปิด (Commander)'; btn.className = 'btn btn-ai active'; } 
+        else if (commanderId) { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด (เครื่องอื่นคุม)'; btn.className = 'btn btn-ai remote'; } 
+        else { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด'; btn.className = 'btn btn-ai inactive'; }
+    });
+}
+
+// --- Data Logic Functions ---
+function updateStats() { 
+    const total = parseInt(document.getElementById('stockSize').value) || 70;
+    const soldCount = Object.keys(stockData).filter(k => stockData[k].owner).length; 
+    document.getElementById('sold-count').innerText = soldCount;
+    document.getElementById('total-count').innerText = total;
 }
 
 function renderSlot(num, data) {
@@ -319,13 +333,6 @@ function renderGrid() {
     if(panel) requestAnimationFrame(() => { panel.scrollTop = previousScrollTop; });
 }
 
-function updateStats() { 
-    const total = parseInt(document.getElementById('stockSize').value) || 70;
-    const soldCount = Object.keys(stockData).filter(k => stockData[k].owner).length; 
-    document.getElementById('sold-count').innerText = soldCount;
-    document.getElementById('total-count').innerText = total;
-}
-
 function connectToStock(vid) {
     if (unsubscribeStock) unsubscribeStock();
     currentVideoId = vid; lastScrollTimestamp = Date.now();
@@ -353,65 +360,81 @@ function connectToStock(vid) {
     });
 }
 
-function renderChat(name, msg, type, uid, img, realName, detectionMethod = null) {
-    const div = document.createElement('div'); div.className = `chat-row ${type} new-msg`;
-    let tagHtml = '';
-    if (detectionMethod === 'regex') tagHtml = '<button class="tag-source regex" title="ตรวจจับด้วย Pattern"><i class="fa-solid fa-bolt"></i></button>';
-    else if (detectionMethod === 'ai') tagHtml = '<button class="tag-source ai" title="ตรวจจับด้วย AI"><i class="fa-solid fa-robot"></i></button>';
-    div.innerHTML = `<img src="${img}" class="avatar"><div class="chat-content"><div class="chat-header" data-uid="${uid}" data-realname="${escapeHtml(realName)}">${generateNameHtml(uid, realName)} ${tagHtml}</div><div class="chat-msg">${msg}</div></div>`;
-    const list = document.getElementById('chat-list'); list.appendChild(div);
-    const vp = document.getElementById('chat-viewport');
-    if (!isUserScrolledUp) { vp.scrollTop = vp.scrollHeight; } 
-    else { document.getElementById('btn-scroll-down').style.display = 'block'; }
+async function processOrder(num, owner, uid, src, price, method = 'manual') {
+    const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
+    try {
+        await runTransaction(itemRef, (currentData) => {
+            if (currentData === null) {
+                return { owner, uid, time: Date.now(), queue: [], source: method, price: price || null };
+            } else if (!currentData.owner) {
+                currentData.owner = owner; currentData.uid = uid; currentData.time = Date.now(); currentData.source = method;
+                if(price) currentData.price = price; if(!currentData.queue) currentData.queue = [];
+                return currentData;
+            } else {
+                if (currentData.owner === owner) return; 
+                const queue = currentData.queue || [];
+                if (queue.find(q => q.owner === owner)) return; 
+                queue.push({ owner, uid, time: Date.now() });
+                currentData.queue = queue;
+                return currentData;
+            }
+        });
+        const current = stockData[num];
+        if (current && current.owner === owner) playDing();
+    } catch (e) { console.error("Transaction failed: ", e); }
 }
 
-async function analyzeChatWithAI(text) {
-    if (!geminiApiKey || !isAiCommander) return null;
-    const prompt = `
-Role: You are an AI assistant for a Thai live commerce clothing shop (Manowzab). 
-Your task is to extract the user's intent from their chat message.
-
-Key Entities:
-- **Product ID**: Usually a number (e.g., 1, 15, 99) or starts with F/CF (e.g., F1, CF10).
-- **Price**: A number usually followed by "บาท" or appearing after the ID (e.g., 10=100).
-
-Intents:
-1. **buy**: User wants to purchase an item.
-   - Pattern: "[ID]", "F[ID]", "CF[ID]", "รับ [ID]", "[ID] [Name]", "[ID]=[Price]".
-   - Examples: "10", "F10", "10 ครับ", "10 น้องบี", "10 100", "เอา 10".
-   - CRITICAL EXCEPTION: If the message contains specific question words (เท่าไหร่, ไหม, หรอ, หรือ, ไง) OR specific attribute words (อก, เอว, ยาว, สี, ผ้า, ตำหนิ) appearing alongside a number, it is ALWAYS a "question", NOT a "buy".
-     - "50 สีอะไร" -> question
-     - "10 อกเท่าไหร่" -> question
-     - "50 มีตำหนิไหม" -> question
-     - "ผ้าอะไร 10" -> question
-
-2. **cancel**: User wants to cancel an order.
-   - Pattern: "CC", "cancel", "ยกเลิก", "ไม่เอา".
-   - Examples: "CC 10", "ยกเลิก 10", "ไม่เอา 10 แล้ว".
-
-3. **question**: User is asking about product details.
-   - Keywords: อก, เอว, ยาว, ผ้า, ราคา, สี, ว่างไหม, ทันไหม, เท่าไหร่, กี่บาท, แบบไหน, ดู, ตำหนิ.
-   - Examples: "10 ว่างไหม", "อก 50 ไหม", "ขอดู 10", "50 สีอะไร".
-
-4. **shipping**: User wants to ship items.
-   - Keywords: "พร้อมส่ง", "สรุปยอด", "ส่งของ", "คิดเงิน".
-
-5. **spam**: Greetings, chit-chat.
-
-Response Format (JSON only):
-{"intent": "buy"|"cancel"|"question"|"shipping"|"spam", "id": number|null, "price": number|null}
-
-Input Message: "${text}"
-`;
-    try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+function processCancel(num, reason) {
+    if (!stockData[num]) return;
+    const current = stockData[num];
+    if (current.queue && Array.isArray(current.queue) && current.queue.length > 0) {
+        const next = current.queue[0];
+        const nextQ = current.queue.slice(1);
+        const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
+        if (current.price) newData.price = current.price;
+        set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
+            if (reason) queueSpeech(reason);
+            setTimeout(() => queueSpeech(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
         });
-        const result = await response.json();
-        const match = result.candidates?.[0]?.content?.parts?.[0]?.text?.match(/\{.*?\}/s);
-        return match ? JSON.parse(match[0]) : null;
-    } catch (e) { return null; }
+    } else {
+        remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { 
+            playCancel(); 
+            if(reason) queueSpeech(reason); 
+        });
+    }
+}
+
+async function smartFetch(url) {
+    try {
+        updateStatusIcon('stat-api', 'ok'); let res = await fetch(url + "&key=" + API_KEYS[currentKeyIdx]); let data = await res.json();
+        if (data.error) { 
+            if (currentKeyIdx < API_KEYS.length - 1) { currentKeyIdx++; return smartFetch(url); } 
+            else { Swal.fire('API Key Error', 'โควต้าเต็มทุกคีย์แล้ว', 'error'); throw new Error(data.error.message); }
+        }
+        return data;
+    } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
+}
+
+async function loadChat() {
+    if (!isConnected || !activeChatId) return; if (isSimulating) return;
+    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
+    try {
+        const data = await smartFetch(url);
+        if (data.items) { 
+            updateStatusIcon('stat-chat', 'ok'); 
+            for (const item of data.items) { await processMessage(item); }
+            chatToken = data.nextPageToken; 
+        }
+        const delay = data.pollingIntervalMillis || 5000; chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
+    } catch(e) { updateStatusIcon('stat-chat', 'err'); chatTimeoutId = setTimeout(loadChat, 10000); }
+}
+
+async function updateViewerCount(vid) {
+    try {
+        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${vid}`);
+        if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 180000); }
+        if (d.items?.[0]) document.getElementById('view-counter').innerText = "👁️ " + Number(d.items[0].liveStreamingDetails.concurrentViewers||0).toLocaleString();
+    } catch (e) { console.error("Viewer Count Error:", e); }
 }
 
 async function processMessage(item) {
@@ -462,91 +485,8 @@ async function processMessage(item) {
     }
 }
 
-async function connectYoutube(vid) {
-    try {
-        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${vid}`);
-        if (!d.items || d.items.length === 0) throw new Error("ID ไม่ถูกต้อง");
-        const item = d.items[0];
-        document.getElementById('live-title').innerText = item.snippet.title;
-        saveHistory(vid, item.snippet.title);
-        queueSpeech("เชื่อมต่อสำเร็จ กำลังอ่านคอมเมนต์จาก " + item.snippet.title);
-        isConnected = true; setLoading(false); isConnecting = false;
-        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
-        updateStatusIcon('stat-api', 'ok');
-        if (item.liveStreamingDetails?.activeLiveChatId) {
-            activeChatId = item.liveStreamingDetails.activeLiveChatId; chatToken = ''; loadChat(); updateViewerCount(vid); viewerIntervalId = setInterval(()=>updateViewerCount(vid), 15000);
-        } else { activeChatId = null; throw new Error("No Live Chat"); }
-    } catch(e) { 
-        console.error(e); 
-        isConnected = true; setLoading(false); isConnecting = false; 
-        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark"; 
-        updateStatusIcon('stat-api', 'err'); 
-    }
-}
-
-async function smartFetch(url) {
-    try {
-        updateStatusIcon('stat-api', 'ok'); let res = await fetch(url + "&key=" + API_KEYS[currentKeyIdx]); let data = await res.json();
-        if (data.error) { 
-            if (currentKeyIdx < API_KEYS.length - 1) { currentKeyIdx++; return smartFetch(url); } 
-            else { Swal.fire('API Key Error', 'โควต้าเต็มทุกคีย์แล้ว', 'error'); throw new Error(data.error.message); }
-        }
-        return data;
-    } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
-}
-
-function initVersionControl() {
-    const badge = document.querySelector('.version-badge');
-    if (badge) {
-        badge.innerText = `${AppInfo.version}`;
-        badge.title = `เวอร์ชั่น: ${AppInfo.version} (${AppInfo.releaseDate})\n\n${AppInfo.changelog.join('\n')}`;
-    }
-    const toolsDropdown = document.getElementById('toolsDropdown');
-    if (toolsDropdown && !document.getElementById('btnForceUpdate')) {
-        const a = document.createElement('a');
-        a.id = 'btnForceUpdate';
-        a.innerHTML = '<i class="fa-solid fa-rotate"></i> บังคับอัปเดต (Force Update)';
-        a.style.color = '#00e676';
-        a.onclick = () => window.forceUpdate();
-        toolsDropdown.insertBefore(a, toolsDropdown.firstChild);
-    }
-}
-
-function initStatusIcons() {
-    const cluster = document.querySelector('.status-cluster');
-    if(cluster) {
-        cluster.innerHTML = `
-            <span id="stat-db" class="status-item" title="สถานะฐานข้อมูล"><i class="fa-solid fa-database"></i></span>
-            <span id="stat-api" class="status-item" title="สถานะ YouTube API"><i class="fa-brands fa-youtube"></i></span>
-            <span id="stat-chat" class="status-item" title="สถานะการดึงแชท"><i class="fa-solid fa-comments"></i></span>
-            <span id="stat-key" class="key-indicator" title="API Key"><i class="fa-solid fa-key"></i> 1</span>
-        `;
-    }
-}
-
-function syncAiCommanderStatus() {
-    onValue(ref(db, 'system/aiCommander'), (snap) => {
-        const commanderId = snap.val();
-        const btn = document.getElementById('btnAICommander');
-        if(!btn) return;
-        if (commanderId === myDeviceId) { isAiCommander = true; btn.innerHTML = '🤖 AI: เปิด (Commander)'; btn.className = 'btn btn-ai active'; } 
-        else if (commanderId) { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด (เครื่องอื่นคุม)'; btn.className = 'btn btn-ai remote'; } 
-        else { isAiCommander = false; btn.innerHTML = '🤖 AI: ปิด'; btn.className = 'btn btn-ai inactive'; }
-    });
-}
-
-function initTooltips() {
-    const tips = {
-        'btnVoice': 'สั่งงานด้วยเสียง', 'btnAICommander': 'ระบบ AI ช่วยจอง', 'btn-shipping': 'รายการพร้อมส่ง',
-        'btnConnect': 'เชื่อมต่อ YouTube', 'btnSound': 'เปิด/ปิดเสียง', 'stockSize': 'จำนวนรายการ'
-    };
-    for(const [id, text] of Object.entries(tips)) { const el = document.getElementById(id); if(el) el.title = text; }
-    const histBtn = document.querySelector('button[onclick="window.openHistory()"]');
-    if(histBtn) histBtn.title = "ดูประวัติการไลฟ์ย้อนหลัง";
-}
-
 // ============================================================
-// 4. WINDOW EXPORTS (Assigned AFTER functions are defined)
+// 4. WINDOW BINDINGS (ASSIGNED AFTER DEFINITIONS)
 // ============================================================
 
 window.forceUpdate = () => { if(confirm('ยืนยันการโหลดโปรแกรมใหม่?')) { localStorage.removeItem('app_version'); window.location.reload(true); } };
@@ -632,6 +572,8 @@ window.renderDashboardTable = () => {
         if(dashboard) dashboard.scrollTop = scrollY;
     }
 };
+window.openDashboard = () => { document.getElementById('dashboard').style.display = 'flex'; window.renderDashboardTable(); };
+window.closeDashboard = () => { document.getElementById('dashboard').style.display = 'none'; };
 window.loadHistoryList = async () => { 
     const list = document.getElementById('history-list');
     list.innerHTML = '<li style="text-align:center; color:#888;">กำลังโหลดประวัติ...</li>';
@@ -749,52 +691,6 @@ window.toggleSimulation = () => {
     } else { menu.innerText = "⚡ เริ่มจำลองแชท"; clearInterval(simIntervalId); }
 };
 
-window.openHistory = () => { 
-    document.getElementById('history-modal').style.display = 'flex'; 
-    window.loadHistoryList(); 
-};
-window.closeHistory = () => { document.getElementById('history-modal').style.display = 'none'; };
-window.changeHistoryPage = (delta) => { historyCurrentPage += delta; window.renderHistoryPage(); };
-window.renderHistoryPage = () => { /* Defined above */ 
-    const list = document.getElementById('history-list');
-    list.innerHTML = '';
-    const searchText = document.getElementById('historySearchInput').value.toLowerCase();
-    const filtered = allHistoryData.filter(i => (i.title && i.title.toLowerCase().includes(searchText)) || (i.id && i.id.toLowerCase().includes(searchText)));
-    const totalPages = Math.ceil(filtered.length / historyItemsPerPage);
-    if(historyCurrentPage > totalPages) historyCurrentPage = totalPages || 1;
-    const start = (historyCurrentPage - 1) * historyItemsPerPage;
-    const end = start + historyItemsPerPage;
-    const pageItems = filtered.slice(start, end);
-    const controls = document.createElement('li');
-    controls.style.cssText = "display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; background:#1e1e1e; padding:10px; border-bottom:1px solid #333; z-index:10; margin-bottom:10px;";
-    controls.innerHTML = `<button class="btn btn-dark" ${historyCurrentPage<=1?'disabled':''} onclick="window.changeHistoryPage(-1)">◀ ย้อน</button><span style="color:#aaa; font-size:0.9em;">หน้า ${historyCurrentPage} / ${totalPages || 1} (ทั้งหมด ${filtered.length})</span><button class="btn btn-dark" ${historyCurrentPage>=totalPages?'disabled':''} onclick="window.changeHistoryPage(1)">ถัดไป ▶</button>`;
-    list.appendChild(controls);
-    if(pageItems.length === 0) { const empty = document.createElement('li'); empty.innerHTML = `<div style="text-align:center; padding:20px; color:#555;">ไม่พบรายการ</div>`; list.appendChild(empty); return; }
-    pageItems.forEach(i => { const li = document.createElement('li'); li.className = 'history-item'; li.innerHTML = `<div><span class="hist-date">${formatThaiDate(i.timestamp||0)}</span> ${i.title||i.id}</div> <button class="btn btn-dark" onclick="window.deleteHistory('${i.id}')">🗑️</button>`; li.querySelector('div').onclick = () => { window.closeHistory(); document.getElementById('vidInput').value = i.id; window.toggleConnection(); }; list.appendChild(li); });
-};
-window.deleteHistory = (vid) => { Swal.fire({title:'ลบประวัติ?', showCancelButton:true}).then(r=>{ if(r.isConfirmed) remove(ref(db, 'history/'+vid)).then(() => window.loadHistoryList()); }); };
-window.toggleShowAll = () => { window.renderDashboardTable(); };
-window.toggleAwayMode = async () => { try { unlockAudio(); const snap = await get(ref(db, 'system/awayMode')); const current = snap.val() || {}; if (current.isAway) { await update(ref(db, 'system/awayMode'), { isAway: false }); } else { await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() }); await set(ref(db, 'system/aiCommander'), myDeviceId); } } catch(e) { console.error("Away Mode Error", e); } };
-window.toggleConnection = () => { 
-    if (isConnected) {
-        clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false;
-        document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary";
-        document.getElementById('status-dot').className = "status-dot"; queueSpeech("หยุดการเชื่อมต่อ"); 
-        chatToken = ''; return;
-    }
-    const vid = document.getElementById('vidInput').value.trim();
-    if (!vid) return Swal.fire('Error', 'ใส่ Video ID ก่อน', 'error');
-    isConnecting = true; setLoading(true); if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-    currentVideoId = vid; connectToStock(vid); set(ref(db, 'system/activeVideo'), vid); 
-    chatToken = '';
-    connectYoutube(vid).catch(e => { 
-        Swal.fire({ icon: 'info', title: 'เชื่อมต่อวิดีโอแล้ว', text: 'ไม่พบห้องแชทสด (อาจเป็นคลิปย้อนหลัง) ระบบจะทำงานในโหมดรับคำสั่งเสียง/กดเองเท่านั้น', timer: 3000 });
-        isConnected = true; setLoading(false); isConnecting = false;
-        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
-        document.getElementById('status-dot').className = "status-dot online";
-    });
-};
-
 // ============================================================
 // 5. EXECUTION START
 // ============================================================
@@ -882,3 +778,7 @@ if (vp) {
         else document.getElementById('btn-scroll-down').style.display = 'block'; 
     });
 }
+
+// Add touch events for iPad audio
+document.addEventListener('touchstart', unlockAudio, { once: false });
+document.addEventListener('click', unlockAudio, { once: false });
