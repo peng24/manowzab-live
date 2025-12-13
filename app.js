@@ -40,8 +40,8 @@ let currentFontSize = 16;
 let currentGridSize = 1;
 let isUserScrolledUp = false;
 
-// Audio
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+// Audio (Initialized later to comply with browser policies)
+let audioCtx = null; 
 const synth = window.speechSynthesis;
 let speechQueue = [];
 let isSpeaking = false;
@@ -73,7 +73,7 @@ if (localVer !== AppInfo.version) {
     window.location.reload(true);
 }
 
-// SWAL Config
+// SWAL Config (Toast Top-Center)
 const ModalSwal = Swal.mixin({
     heightAuto: false,
     scrollbarPadding: false
@@ -82,7 +82,7 @@ window.Swal = ModalSwal;
 
 const Toast = Swal.mixin({
     toast: true,
-    position: 'top-end',
+    position: 'top', // Changed to top center for better visibility
     showConfirmButton: false,
     timer: 3000,
     timerProgressBar: true,
@@ -304,7 +304,6 @@ function connectToStock(vid) {
     if (unsubscribeStock) unsubscribeStock();
     currentVideoId = vid; lastScrollTimestamp = Date.now();
     let isFirstLoad = true; 
-    let lastDataStr = "";
 
     unsubscribeStock = onValue(ref(db, `stock/${vid}`), snap => {
         const val = snap.val() || {};
@@ -316,11 +315,9 @@ function connectToStock(vid) {
                 const newItem = val[key];
                 const oldItem = stockData[key];
 
-                // 1. New Booking (Was empty/null -> Has owner)
+                // 1. New Booking
                 if (newItem?.owner && (!oldItem || !oldItem.owner)) {
-                     // Play local sound for immediate feedback on all connected devices
                      playDing(); 
-                     // Scroll to item
                      setTimeout(() => {
                         const el = document.getElementById('stock-' + key);
                         if (el) {
@@ -330,7 +327,7 @@ function connectToStock(vid) {
                     }, 50);
                 }
                 
-                // 2. Cancellation (Was owned -> Empty/Null)
+                // 2. Cancellation
                 if ((!newItem || !newItem.owner) && oldItem?.owner) {
                     playCancel();
                 }
@@ -362,33 +359,42 @@ function broadcastMessage(msg) {
     set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() });
 }
 
-// --- AUDIO FUNCTIONS (iOS Enhanced) ---
+// --- AUDIO FUNCTIONS (Re-written for robustness) ---
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+}
+
 function unlockAudio() {
+    initAudio();
+    if (isAudioUnlocked) return;
+    
     if (audioCtx.state === 'suspended') {
         audioCtx.resume();
     }
-    // Create silent oscillator to force audio engine on
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    g.gain.value = 0;
-    o.connect(g);
-    g.connect(audioCtx.destination);
-    o.start(0);
-    o.stop(0.1);
     
-    // Reset synth
     synth.cancel();
+    
+    // Play a silent buffer to truly unlock iOS audio
+    const buffer = audioCtx.createBuffer(1, 1, 22050);
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioCtx.destination);
+    source.start(0);
+
     isAudioUnlocked = true;
-    console.log("Audio Force Unlocked");
+    console.log("Audio Unlocked");
 }
-// Listen to multiple interaction events for iOS
+
+// Listen for interactions
 ['click', 'touchstart', 'touchend', 'keydown'].forEach(evt => {
-    window.addEventListener(evt, unlockAudio, { once: false }); // Retry often
+    window.addEventListener(evt, unlockAudio, { once: false });
 });
 
 function queueSpeech(txt) { 
     if(!isSoundOn) return; 
-    // Force resume before speaking
+    initAudio();
     if(audioCtx.state === 'suspended') audioCtx.resume();
     speechQueue.push(txt); 
     if (!isSpeaking) processQueue(); 
@@ -400,9 +406,11 @@ function processQueue() {
     isSpeaking = true;
     const u = new SpeechSynthesisUtterance(speechQueue.shift());
     u.lang = 'th-TH';
+    // Attempt to select a Thai voice
     const voices = synth.getVoices();
     const thVoice = voices.find(v => v.lang.includes('th'));
     if (thVoice) u.voice = thVoice;
+    
     u.onend = () => { isSpeaking = false; processQueue(); };
     u.onerror = () => { isSpeaking = false; processQueue(); };
     activeUtterance = u; 
@@ -411,6 +419,7 @@ function processQueue() {
 
 function playDing() { 
     if(!isSoundOn) return; 
+    initAudio();
     if(audioCtx.state === 'suspended') audioCtx.resume();
     const o = audioCtx.createOscillator(); 
     const g = audioCtx.createGain(); 
@@ -424,6 +433,7 @@ function playDing() {
 
 function playCancel() { 
     if(!isSoundOn) return; 
+    initAudio();
     if(audioCtx.state === 'suspended') audioCtx.resume();
     const o = audioCtx.createOscillator(); 
     const g = audioCtx.createGain(); 
@@ -499,7 +509,7 @@ window.doAction = (num, action) => {
         const nick = stockData[num].owner || 'ลูกค้า';
         const msg = `${nick} ยกเลิกรายการที่ ${num} ค่ะ`;
         processCancel(num, msg); 
-        broadcastMessage(msg); // Broadcast manual cancel
+        broadcastMessage(msg); 
     }
 };
 
@@ -561,6 +571,26 @@ window.openHistory = () => {
 };
 window.closeHistory = () => { document.getElementById('history-modal').style.display = 'none'; };
 window.changeHistoryPage = (delta) => { historyCurrentPage += delta; window.renderHistoryPage(); };
+
+window.toggleConnection = () => {
+    if (isConnected) {
+        clearInterval(intervalId); clearInterval(viewerIntervalId); if(chatTimeoutId) clearTimeout(chatTimeoutId); isConnected = false;
+        document.getElementById('btnConnect').innerText = "CONNECT"; document.getElementById('btnConnect').className = "btn btn-primary";
+        document.getElementById('status-dot').className = "status-dot"; queueSpeech("หยุดการเชื่อมต่อ"); 
+        chatToken = ''; return;
+    }
+    const vid = document.getElementById('vidInput').value.trim();
+    if (!vid) return Swal.fire('Error', 'ใส่ Video ID ก่อน', 'error');
+    isConnecting = true; setLoading(true); if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    currentVideoId = vid; connectToStock(vid); set(ref(db, 'system/activeVideo'), vid); 
+    chatToken = '';
+    connectYoutube(vid).catch(e => { 
+        Swal.fire({ icon: 'info', title: 'เชื่อมต่อวิดีโอแล้ว', text: 'ไม่พบห้องแชทสด (อาจเป็นคลิปย้อนหลัง) ระบบจะทำงานในโหมดรับคำสั่งเสียง/กดเองเท่านั้น', timer: 3000 });
+        isConnected = true; setLoading(false); isConnecting = false;
+        document.getElementById('btnConnect').innerText = "DISCONNECT"; document.getElementById('btnConnect').className = "btn btn-dark";
+        document.getElementById('status-dot').className = "status-dot online";
+    });
+};
 
 window.toggleAwayMode = async () => {
     try {
@@ -647,38 +677,14 @@ async function smartFetch(url) {
     } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
 }
 
-async function loadChat() {
-    if (!isConnected || !activeChatId) return; if (isSimulating) return;
-    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
-    try {
-        const data = await smartFetch(url);
-        if (data.items) { 
-            updateStatusIcon('stat-chat', 'ok'); 
-            for (const item of data.items) { await processMessage(item); }
-            chatToken = data.nextPageToken; 
-        }
-        const delay = data.pollingIntervalMillis || 5000; chatTimeoutId = setTimeout(loadChat, Math.max(delay, 3000));
-    } catch(e) { updateStatusIcon('stat-chat', 'err'); chatTimeoutId = setTimeout(loadChat, 10000); }
-}
-
-async function updateViewerCount(vid) {
-    try {
-        const d = await smartFetch(`https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${vid}`);
-        if (d.items?.[0]?.liveStreamingDetails?.actualEndTime && !autoDisconnectTimer) { queueSpeech("ไลฟ์จบแล้ว"); autoDisconnectTimer = setTimeout(() => window.toggleConnection(), 180000); }
-        if (d.items?.[0]) document.getElementById('view-counter').innerText = "👁️ " + Number(d.items[0].liveStreamingDetails.concurrentViewers||0).toLocaleString();
-    } catch (e) { console.error("Viewer Count Error:", e); }
-}
-
-// ============================================================
-// 6. EXECUTION START
-// ============================================================
+// --- INIT LISTENERS ---
 signInAnonymously(auth);
 remove(ref(db, 'stock/demo'));
 
 onAuthStateChanged(auth, user => {
     if (user) {
-        initTooltips();
-        initStatusIcons();
+        initTooltips(); 
+        initStatusIcons(); 
         initVersionControl();
         syncAiCommanderStatus();
         updateStatusIcon('stat-db', 'ok');
@@ -715,6 +721,7 @@ onAuthStateChanged(auth, user => {
         
         onValue(ref(db, '.info/connected'), s => updateStatusIcon('stat-db', s.val() ? 'ok' : 'err'));
 
+        // Away Mode Listener
         onValue(ref(db, 'system/awayMode'), (snap) => {
             const val = snap.val();
             const banner = document.getElementById('awayBanner');
