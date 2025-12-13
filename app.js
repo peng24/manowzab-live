@@ -895,7 +895,6 @@ async function smartFetch(url) {
 // --- INIT LISTENERS ---
 signInAnonymously(auth);
 remove(ref(db, 'stock/demo'));
-syncAiCommanderStatus();
 
 onAuthStateChanged(auth, user => {
     if (user) {
@@ -926,8 +925,68 @@ onAuthStateChanged(auth, user => {
             } catch(e) {}
         });
         onValue(ref(db, '.info/connected'), s => updateStatusIcon('stat-db', s.val() ? 'ok' : 'err'));
+
+        // MOVED HERE: Away Mode Listener (Safe Zone)
+        onValue(ref(db, 'system/awayMode'), (snap) => {
+            const val = snap.val();
+            const banner = document.getElementById('awayBanner');
+            const newState = val ? val.isAway : false;
+
+            if (newState !== currentAwayState) {
+                 if (newState) {
+                     queueSpeech("แอดมินพาลูกเข้านอนแล้ว");
+                 } else {
+                     queueSpeech("ลูกหลับแล้ว แอดมินสแตนบาย");
+                 }
+                 currentAwayState = newState;
+            }
+
+            if (currentAwayState) {
+                if (banner) banner.style.display = 'flex';
+                awayStartTime = val.startTime;
+                if (!awayInterval) {
+                     updateAwayTimer(); 
+                     awayInterval = setInterval(updateAwayTimer, 1000); 
+                }
+            } else {
+                if (banner) banner.style.display = 'none';
+                if (awayInterval) {
+                    clearInterval(awayInterval);
+                    awayInterval = null;
+                }
+            }
+        });
+
+        // MOVED HERE: AI Commander Sync (Safe Zone)
+        syncAiCommanderStatus();
     }
 });
+
+function updateAwayTimer() {
+    if (!currentAwayState) return;
+    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
+    const minutes = Math.floor(diff / 60);
+    const seconds = diff % 60;
+    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const el = document.getElementById('awayTimer');
+    if (el) el.innerText = text;
+}
+
+window.toggleAwayMode = async () => {
+    try {
+        unlockAudio();
+        const snap = await get(ref(db, 'system/awayMode'));
+        const current = snap.val() || {};
+        if (current.isAway) {
+            await update(ref(db, 'system/awayMode'), { isAway: false });
+        } else {
+            await update(ref(db, 'system/awayMode'), { isAway: true, startTime: Date.now() });
+            await set(ref(db, 'system/aiCommander'), myDeviceId);
+        }
+    } catch(e) {
+        console.error("Away Mode Error", e);
+    }
+};
 
 const vp = document.getElementById('chat-viewport');
 if (vp) {
