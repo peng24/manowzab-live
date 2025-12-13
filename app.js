@@ -1,6 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import { getDatabase, ref, set, update, remove, onValue, get, serverTimestamp, query, orderByChild, runTransaction } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
+import { AppInfo } from "./version.js"; // Import Version Info
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
@@ -84,63 +85,19 @@ function saveHistory(vid, title) {
     if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); 
 }
 
-// --- AUDIO SYSTEM ---
-function unlockAudio() {
-    if (audioCtx.state === 'suspended') {
-        audioCtx.resume().then(() => {
-            const u = new SpeechSynthesisUtterance(" ");
-            synth.speak(u);
-        });
+// --- VERSION CONTROL SYSTEM ---
+function initVersionControl() {
+    const badge = document.querySelector('.version-badge');
+    if (badge) {
+        badge.innerText = `${AppInfo.version}`;
+        // Create tooltip content
+        const tooltipText = `เวอร์ชั่น: ${AppInfo.version} (${AppInfo.releaseDate})\n\nรายการแก้ไข:\n${AppInfo.changelog.join('\n')}`;
+        badge.title = tooltipText;
+        
+        // Optional: Console log for debug
+        console.log(`%c Manowzab Command Center ${AppInfo.version} `, 'background: #222; color: #bada55; padding: 4px; border-radius: 4px;', AppInfo.changelog);
     }
 }
-document.addEventListener('click', () => { unlockAudio(); }, { once: true });
-
-window.toggleSound = () => { 
-    isSoundOn = !isSoundOn; 
-    const btn = document.getElementById('btnSound');
-    if (isSoundOn) {
-        btn.className = 'btn btn-mute active';
-        btn.innerText = '🔊 เสียง: เปิด';
-        unlockAudio(); 
-        queueSpeech("เปิดเสียงค่ะ"); 
-    } else { 
-        btn.className = 'btn btn-mute';
-        btn.innerText = '🔇 เสียง: ปิด';
-        window.resetVoice(); 
-    }
-};
-
-window.resetVoice = () => { 
-    synth.cancel(); 
-    speechQueue = []; 
-    isSpeaking = false; 
-    if(isSoundOn) queueSpeech("รีเซ็ตเสียงแล้ว"); 
-};
-
-function queueSpeech(txt) { if(!isSoundOn) return; speechQueue.push(txt); if (!isSpeaking) processQueue(); }
-
-function processQueue() {
-    if (speechQueue.length === 0) { isSpeaking = false; return; }
-    if (synth.speaking && !isSpeaking) { synth.cancel(); }
-    isSpeaking = true;
-    const u = new SpeechSynthesisUtterance(speechQueue.shift());
-    u.lang = 'th-TH';
-    const voices = synth.getVoices();
-    const thVoice = voices.find(v => v.lang.includes('th'));
-    if (thVoice) u.voice = thVoice;
-    u.onend = () => { isSpeaking = false; processQueue(); };
-    u.onerror = (e) => { console.error("TTS Error:", e.error); isSpeaking = false; processQueue(); };
-    activeUtterance = u; 
-    synth.speak(u);
-}
-
-window.testVoice = () => {
-    queueSpeech("ทดสอบเสียง หนึ่ง สอง สาม สี่ ห้า");
-};
-
-function playDing() { if(!isSoundOn) return; const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.connect(g); g.connect(audioCtx.destination); o.frequency.setValueAtTime(800, audioCtx.currentTime); o.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime+0.1); g.gain.setValueAtTime(0.3, audioCtx.currentTime); g.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime+0.1); o.start(); o.stop(audioCtx.currentTime+0.1); }
-function playCancel() { if(!isSoundOn) return; const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.type='sawtooth'; o.connect(g); g.connect(audioCtx.destination); o.frequency.setValueAtTime(150, audioCtx.currentTime); g.gain.setValueAtTime(0.2, audioCtx.currentTime); o.start(); o.stop(audioCtx.currentTime+0.3); }
-setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
 // --- HELPER FUNCTIONS DEFINITIONS ---
 function syncAiCommanderStatus() {
@@ -167,7 +124,6 @@ function initTooltips() {
         const el = document.getElementById(id);
         if(el) el.title = text;
     }
-    // General tooltip for history button (closest parent check not needed if we select by class or structure, but for now simple ids)
     const histBtn = document.querySelector('button[onclick="window.openHistory()"]');
     if(histBtn) histBtn.title = "ดูประวัติการไลฟ์ย้อนหลัง";
 }
@@ -206,7 +162,6 @@ window.updateShippingButton = () => {
     }
 };
 
-// --- UPDATED SHIPPING DASHBOARD ---
 window.renderDashboardTable = () => {
     const dashboard = document.querySelector('.dashboard-overlay');
     const scrollY = dashboard ? dashboard.scrollTop : 0; 
@@ -217,12 +172,10 @@ window.renderDashboardTable = () => {
         const userOrders = {};
         const allBuyerUids = new Set();
         
-        // 1. Scan Stock for all buyers
         Object.keys(stockData).forEach(num => {
             const item = stockData[num]; 
             if(item.uid) {
                 allBuyerUids.add(item.uid);
-                // We only build userOrders for those we will display later, but lets gather data first
                 if (!userOrders[item.uid]) userOrders[item.uid] = { name: item.owner, items: [], totalPrice: 0, uid: item.uid };
                 const price = item.price ? parseInt(item.price) : 0;
                 userOrders[item.uid].items.push({ num: num, price: price });
@@ -230,12 +183,10 @@ window.renderDashboardTable = () => {
             }
         });
 
-        // 2. Identify who is ready
         const currentShipping = shippingData[currentVideoId] || {};
         const readyUids = [...allBuyerUids].filter(uid => currentShipping[uid] && currentShipping[uid].ready);
         const notReadyUids = [...allBuyerUids].filter(uid => !(currentShipping[uid] && currentShipping[uid].ready));
 
-        // 3. Render Selector for adding buyers manually
         if (notReadyUids.length > 0) {
             const addRow = document.createElement('tr');
             addRow.innerHTML = `
@@ -257,7 +208,6 @@ window.renderDashboardTable = () => {
              tbody.appendChild(infoRow);
         }
 
-        // 4. Render Table (Ready Only)
         if (readyUids.length === 0) {
             const emptyRow = document.createElement('tr');
             emptyRow.innerHTML = `<td colspan="3" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`;
@@ -285,7 +235,6 @@ window.manualAddShipping = () => {
     if(uid) {
         update(ref(db, `shipping/${currentVideoId}/${uid}`), {ready: true, timestamp: Date.now()})
         .then(() => {
-            // Re-render handled by listener
             Swal.fire({
                 icon: 'success',
                 title: 'เพิ่มลงรายการส่งของแล้ว',
@@ -350,6 +299,64 @@ window.scrollToBottom = () => {
     isUserScrolledUp = false;
     document.getElementById('btn-scroll-down').style.display = 'none';
 };
+
+// --- AUDIO SYSTEM ---
+function unlockAudio() {
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume().then(() => {
+            const u = new SpeechSynthesisUtterance(" ");
+            synth.speak(u);
+        });
+    }
+}
+document.addEventListener('click', () => { unlockAudio(); }, { once: true });
+
+window.toggleSound = () => { 
+    isSoundOn = !isSoundOn; 
+    const btn = document.getElementById('btnSound');
+    if (isSoundOn) {
+        btn.className = 'btn btn-mute active';
+        btn.innerText = '🔊 เสียง: เปิด';
+        unlockAudio(); 
+        queueSpeech("เปิดเสียงค่ะ"); 
+    } else { 
+        btn.className = 'btn btn-mute';
+        btn.innerText = '🔇 เสียง: ปิด';
+        window.resetVoice(); 
+    }
+};
+
+window.resetVoice = () => { 
+    synth.cancel(); 
+    speechQueue = []; 
+    isSpeaking = false; 
+    if(isSoundOn) queueSpeech("รีเซ็ตเสียงแล้ว"); 
+};
+
+function queueSpeech(txt) { if(!isSoundOn) return; speechQueue.push(txt); if (!isSpeaking) processQueue(); }
+
+function processQueue() {
+    if (speechQueue.length === 0) { isSpeaking = false; return; }
+    if (synth.speaking && !isSpeaking) { synth.cancel(); }
+    isSpeaking = true;
+    const u = new SpeechSynthesisUtterance(speechQueue.shift());
+    u.lang = 'th-TH';
+    const voices = synth.getVoices();
+    const thVoice = voices.find(v => v.lang.includes('th'));
+    if (thVoice) u.voice = thVoice;
+    u.onend = () => { isSpeaking = false; processQueue(); };
+    u.onerror = (e) => { console.error("TTS Error:", e.error); isSpeaking = false; processQueue(); };
+    activeUtterance = u; 
+    synth.speak(u);
+}
+
+window.testVoice = () => {
+    queueSpeech("ทดสอบเสียง หนึ่ง สอง สาม สี่ ห้า");
+};
+
+function playDing() { if(!isSoundOn) return; const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.connect(g); g.connect(audioCtx.destination); o.frequency.setValueAtTime(800, audioCtx.currentTime); o.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime+0.1); g.gain.setValueAtTime(0.3, audioCtx.currentTime); g.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime+0.1); o.start(); o.stop(audioCtx.currentTime+0.1); }
+function playCancel() { if(!isSoundOn) return; const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.type='sawtooth'; o.connect(g); g.connect(audioCtx.destination); o.frequency.setValueAtTime(150, audioCtx.currentTime); g.gain.setValueAtTime(0.2, audioCtx.currentTime); o.start(); o.stop(audioCtx.currentTime+0.3); }
+setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
 // --- LOGIC ---
 async function analyzeChatWithAI(text) {
@@ -711,90 +718,16 @@ window.askAiKey = () => { Swal.fire({ title: 'ตั้งค่า Gemini API K
 window.adjustZoom = (n) => { currentFontSize+=n; document.documentElement.style.setProperty('--chat-size', currentFontSize+'px'); };
 window.adjustGridZoom = (n) => { currentGridSize+=n; document.documentElement.style.setProperty('--grid-size', currentGridSize+'em'); };
 
-// --- UPDATED HISTORY WITH PAGINATION ---
-window.openHistory = () => { 
-    document.getElementById('history-modal').style.display = 'flex'; 
-    window.loadHistoryList(); // Load only when opened
-};
-window.closeHistory = () => { document.getElementById('history-modal').style.display = 'none'; };
-
-window.loadHistoryList = async () => {
-    const list = document.getElementById('history-list');
-    list.innerHTML = '<li style="text-align:center; color:#888;">กำลังโหลดประวัติ...</li>';
-    
-    try {
-        const snapshot = await get(ref(db, 'history'));
-        const items = [];
-        snapshot.forEach(c => items.push({ id: c.key, ...c.val() }));
-        // Sort Newest first
-        items.sort((a,b) => (b.timestamp||0)-(a.timestamp||0));
-        allHistoryData = items;
-        historyCurrentPage = 1;
-        window.renderHistoryPage();
-    } catch(e) {
-        list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
-    }
-};
-
-window.renderHistoryPage = () => {
-    const list = document.getElementById('history-list');
-    list.innerHTML = '';
-    
-    // Filter
-    const searchText = document.getElementById('historySearchInput').value.toLowerCase();
-    const filtered = allHistoryData.filter(i => 
-        (i.title && i.title.toLowerCase().includes(searchText)) || 
-        (i.id && i.id.toLowerCase().includes(searchText))
-    );
-
-    // Pagination
-    const totalPages = Math.ceil(filtered.length / historyItemsPerPage);
-    if(historyCurrentPage > totalPages) historyCurrentPage = totalPages || 1;
-    
-    const start = (historyCurrentPage - 1) * historyItemsPerPage;
-    const end = start + historyItemsPerPage;
-    const pageItems = filtered.slice(start, end);
-
-    // Controls
-    const controls = document.createElement('li');
-    controls.style.cssText = "display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; background:#1e1e1e; padding:10px; border-bottom:1px solid #333; z-index:10; margin-bottom:10px;";
-    controls.innerHTML = `
-        <button class="btn btn-dark" ${historyCurrentPage<=1?'disabled':''} onclick="window.changeHistoryPage(-1)">◀ ย้อน</button>
-        <span style="color:#aaa; font-size:0.9em;">หน้า ${historyCurrentPage} / ${totalPages || 1} (ทั้งหมด ${filtered.length})</span>
-        <button class="btn btn-dark" ${historyCurrentPage>=totalPages?'disabled':''} onclick="window.changeHistoryPage(1)">ถัดไป ▶</button>
-    `;
-    list.appendChild(controls);
-
-    if(pageItems.length === 0) {
-        const empty = document.createElement('li');
-        empty.innerHTML = `<div style="text-align:center; padding:20px; color:#555;">ไม่พบรายการ</div>`;
-        list.appendChild(empty);
-        return;
-    }
-
-    pageItems.forEach(i => {
-        const li = document.createElement('li'); 
-        li.className = 'history-item';
-        li.innerHTML = `<div><span class="hist-date">${formatThaiDate(i.timestamp||0)}</span> ${i.title||i.id}</div> <button class="btn btn-dark" onclick="window.deleteHistory('${i.id}')">🗑️</button>`;
-        li.querySelector('div').onclick = () => { window.closeHistory(); document.getElementById('vidInput').value = i.id; window.toggleConnection(); };
-        list.appendChild(li);
-    });
-};
-
-window.changeHistoryPage = (delta) => {
-    historyCurrentPage += delta;
-    window.renderHistoryPage();
-};
-
 window.filterHistory = () => {
-    historyCurrentPage = 1;
-    window.renderHistoryPage();
-};
-
-window.deleteHistory = (vid) => { 
-    Swal.fire({title:'ลบประวัติ?', showCancelButton:true}).then(r=>{ 
-        if(r.isConfirmed) remove(ref(db, 'history/'+vid)).then(() => window.loadHistoryList()); 
-    }); 
+    const input = document.getElementById('historySearchInput');
+    const filter = input.value.toUpperCase();
+    const ul = document.getElementById("history-list");
+    const li = ul.getElementsByTagName('li');
+    for (let i = 0; i < li.length; i++) {
+        const txtValue = li[i].textContent || li[i].innerText;
+        if (txtValue.toUpperCase().indexOf(filter) > -1) { li[i].style.display = ""; } 
+        else { li[i].style.display = "none"; }
+    }
 };
 
 window.handleStockClick = (num) => {
@@ -1118,6 +1051,7 @@ onAuthStateChanged(auth, user => {
 
         // MOVED HERE: AI Commander Sync (Safe Zone)
         syncAiCommanderStatus();
+        initVersionControl();
     }
 });
 
