@@ -1,11 +1,11 @@
-// Version: v2.1.11 | แก้ไข: แก้บั๊กแชทหาย (Token Logic Fix)
+// Version: v2.1.12 | แก้ไข: เพิ่มปุ่มลบในรถส่งของ, จัดลำดับโค้ดแก้จอขาว, โหลดประวัติ
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import { getDatabase, ref, set, update, remove, onValue, get, serverTimestamp, query, orderByChild, runTransaction } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
 import { AppInfo } from "./version.js";
 
 // ============================================================
-// 1. CONFIGURATION
+// 1. CONFIGURATION & VARIABLES
 // ============================================================
 const firebaseConfig = {
     apiKey: "AIzaSyAVYqEmdw-AwS1tCElhSaXDLP1Aq35chp0",
@@ -16,10 +16,7 @@ const firebaseConfig = {
 
 const API_KEYS = ["AIzaSyAVzYQN51V-kITnyJWGy8IVSktitxrVD8g", "AIzaSyBlnw6tpETYu61XSNqd7zXt25Fv_vmbWJU", "AIzaSyAX3dwUqBFeCBjjZixVnlcBz56gAfNWzs0", "AIzaSyAxjRAs01mpt-NxQiR3yStr6Q-57EiQq64"];
 
-// ============================================================
-// 2. GLOBAL VARIABLES
-// ============================================================
-// System State
+// --- GLOBAL VARIABLES ---
 let currentKeyIdx = 0;
 let isConnected = false;
 let isConnecting = false;
@@ -28,23 +25,18 @@ let myDeviceId = 'dev-' + Math.random().toString(36).substr(2, 9);
 let isAiCommander = false; 
 let geminiApiKey = localStorage.getItem('geminiApiKey') || '';
 
-// Data State
 let currentVideoId = 'demo';
 let stockData = {};
 let savedNames = {};
 let shippingData = {};
 let seenMessageIds = {};
 
-// Timers
 let intervalId, viewerIntervalId, simIntervalId, autoDisconnectTimer, chatTimeoutId, awayInterval;
-
-// Chat & Scroll
 let activeChatId = '';
 let chatToken = '';
 let lastScrollTimestamp = 0; 
 let unsubscribeStock, unsubscribeSystem;
 
-// UI
 let currentFontSize = 16;
 let currentGridSize = 1;
 let isUserScrolledUp = false;
@@ -76,7 +68,7 @@ const auth = getAuth(app);
 // Check Version & Auto-Reload
 const localVer = localStorage.getItem('app_version');
 if (localVer !== AppInfo.version) {
-    console.log(`System Upgrade: ${localVer} -> ${AppInfo.version}`);
+    console.log(`Version Update: ${localVer} -> ${AppInfo.version}`);
     localStorage.setItem('app_version', AppInfo.version);
     window.location.reload(true);
 }
@@ -91,10 +83,9 @@ const Toast = Swal.mixin({
 });
 
 // ============================================================
-// 3. ALL FUNCTIONS (DEFINED BEFORE USE - STRICT ORDER)
+// 2. HELPER FUNCTIONS
 // ============================================================
 
-// --- 3.1 Helper Functions ---
 function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
 function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
 function formatThaiDate(timestamp) { const date = new Date(timestamp); const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]; return date.getDate() + ' ' + months[date.getMonth()] + ' ' + (date.getFullYear() + 543) + ' (' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') + ')'; }
@@ -118,16 +109,6 @@ function saveHistory(vid, title) {
     if(vid && vid!=='demo') set(ref(db, 'history/'+vid), {title, timestamp: serverTimestamp()}); 
 }
 
-function updateAwayTimer() {
-    if (!currentAwayState) return;
-    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
-    const minutes = Math.floor(diff / 60);
-    const seconds = diff % 60;
-    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    const el = document.getElementById('awayTimer');
-    if (el) el.innerText = text;
-}
-
 function broadcastMessage(msg) { set(ref(db, 'system/broadcast'), { text: msg, time: Date.now() }); }
 
 function generateNameHtml(uid, realName) {
@@ -143,7 +124,7 @@ function generateNameHtml(uid, realName) {
     return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
 }
 
-// --- 3.2 Audio Functions ---
+// --- Audio Functions ---
 function initAudio() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -155,16 +136,16 @@ function unlockAudio() {
     if (isAudioUnlocked) return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
     synth.cancel();
-    // Silent play
-    const buffer = audioCtx.createBuffer(1, 1, 22050);
-    const source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioCtx.destination);
-    source.start(0);
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    g.gain.value = 0;
+    o.connect(g);
+    g.connect(audioCtx.destination);
+    o.start(0);
+    o.stop(0.1);
     isAudioUnlocked = true;
     console.log("Audio Unlocked");
 }
-// iOS Wake up
 ['click', 'touchstart', 'keydown'].forEach(evt => {
     if(typeof document !== 'undefined') document.addEventListener(evt, unlockAudio, { once: false });
 });
@@ -222,7 +203,9 @@ function playCancel() {
 }
 setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
-// --- 3.3 Initialization Helpers ---
+// --- 3. CORE LOGIC FUNCTIONS ---
+// (Declared before use)
+
 function initVersionControl() {
     const badge = document.querySelector('.version-badge');
     if (badge) {
@@ -280,7 +263,17 @@ function updateStats() {
     document.getElementById('total-count').innerText = total;
 }
 
-// --- 3.4 Data Logic ---
+function updateAwayTimer() {
+    if (!currentAwayState) return;
+    const diff = Math.floor((Date.now() - awayStartTime) / 1000);
+    const minutes = Math.floor(diff / 60);
+    const seconds = diff % 60;
+    const text = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const el = document.getElementById('awayTimer');
+    if (el) el.innerText = text;
+}
+
+// --- Data Logic ---
 async function processOrder(num, owner, uid, src, price, method = 'manual') {
     const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
     try {
@@ -319,13 +312,13 @@ function processCancel(num, reason) {
         });
     } else {
         remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { 
-            // Sound is handled by listener
+            // Sound handled by listener
             if(reason) broadcastMessage(reason);
         });
     }
 }
 
-// --- 3.5 Rendering ---
+// --- Rendering ---
 function renderSlot(num, data) {
     const el = document.getElementById('stock-' + num); if(!el) return;
     if (!data.owner) {
@@ -393,36 +386,25 @@ function connectToStock(vid) {
     if (unsubscribeStock) unsubscribeStock();
     currentVideoId = vid; lastScrollTimestamp = Date.now();
     let isFirstLoad = true; 
-
     unsubscribeStock = onValue(ref(db, `stock/${vid}`), snap => {
         const val = snap.val() || {};
-        
         if (!isFirstLoad) {
             const keys = Object.keys({...val, ...stockData});
             for (const key of keys) {
                 const newItem = val[key];
                 const oldItem = stockData[key];
-                
                 if (newItem?.owner && (!oldItem || !oldItem.owner)) {
                      playDing(); 
                      setTimeout(() => {
                         const el = document.getElementById('stock-' + key);
-                        if (el) {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            el.classList.add('highlight');
-                        }
+                        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('highlight'); }
                     }, 50);
                 }
                 if ((!newItem || !newItem.owner) && oldItem?.owner) { playCancel(); }
             }
         }
-
-        stockData = val; 
-        renderGrid(); 
-        updateStats(); 
-        window.updateShippingButton();
+        stockData = val; renderGrid(); updateStats(); window.updateShippingButton();
         if(document.getElementById('dashboard').style.display === 'flex') window.renderDashboardTable();
-        
         isFirstLoad = false;
     });
 }
@@ -439,7 +421,7 @@ function renderChat(name, msg, type, uid, img, realName, detectionMethod = null)
     else { document.getElementById('btn-scroll-down').style.display = 'block'; }
 }
 
-// --- 3.6 API & Connection ---
+// --- API ---
 async function smartFetch(url) {
     try {
         updateStatusIcon('stat-api', 'ok'); let res = await fetch(url + "&key=" + API_KEYS[currentKeyIdx]); let data = await res.json();
@@ -553,12 +535,7 @@ async function loadChat() {
     const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
     try {
         const data = await smartFetch(url);
-        
-        // --- FIX: ALWAYS UPDATE TOKEN ---
-        if (data.nextPageToken) {
-            chatToken = data.nextPageToken; 
-        }
-        
+        if (data.nextPageToken) { chatToken = data.nextPageToken; }
         if (data.items) { 
             updateStatusIcon('stat-chat', 'ok'); 
             for (const item of data.items) { await processMessage(item); }
@@ -598,7 +575,7 @@ async function connectYoutube(vid) {
 }
 
 // ============================================================
-// 4. WINDOW EXPORTS (Assigned AFTER all definitions)
+// 4. WINDOW EXPORTS (ASSIGNED AFTER DEFINITIONS)
 // ============================================================
 
 window.forceUpdate = () => { if(confirm('ยืนยันการโหลดโปรแกรมใหม่?')) { localStorage.removeItem('app_version'); window.location.reload(true); } };
@@ -613,20 +590,8 @@ window.saveStockSize = (val) => { set(ref(db, 'system/stockSize'), parseInt(val)
 window.updateNickSilent = (uid, val) => { if(!val) return; update(ref(db, `nicknames/${uid}`), {nick: val}); };
 window.printLabel = (uid) => { let total=0, items=[]; Object.keys(stockData).forEach(n=>{ if(stockData[n].uid===uid) { items.push(`#${n} ${stockData[n].price?stockData[n].price:''}`); total+=parseInt(stockData[n].price||0); } }); let address = ""; if (shippingData[currentVideoId] && shippingData[currentVideoId][uid]) { address = shippingData[currentVideoId][uid].address || ""; } else if (savedNames[uid]) { address = savedNames[uid].address || ""; } document.getElementById('print-area').innerHTML = `<div class="print-label"><div class="print-header">ผู้รับ: ${savedNames[uid]?.nick||'ลูกค้า'}</div><div class="print-address">${address}</div><div class="print-items">${items.join(', ')}<br>รวม: ${total} บาท</div></div>`; window.print(); };
 window.toggleFullScreen = () => { if (!document.fullscreenElement && !document.webkitFullscreenElement) { if (document.documentElement.requestFullscreen) { document.documentElement.requestFullscreen(); } else if (document.documentElement.webkitRequestFullscreen) { document.documentElement.webkitRequestFullscreen(); } } else { if (document.exitFullscreen) { document.exitFullscreen(); } else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); } } };
-window.toggleDropdown = (event) => { 
-    if(event) event.stopPropagation();
-    document.getElementById("toolsDropdown").classList.toggle("show"); 
-};
-window.addEventListener('click', (e) => {
-    if (!e.target.closest('.btn-sim')) {
-        const dropdowns = document.getElementsByClassName("dropdown-content");
-        for (let i = 0; i < dropdowns.length; i++) {
-            const openDropdown = dropdowns[i];
-            if (openDropdown.classList.contains('show')) openDropdown.classList.remove('show');
-        }
-    }
-});
-
+window.toggleDropdown = (event) => { if(event) event.stopPropagation(); document.getElementById("toolsDropdown").classList.toggle("show"); };
+window.addEventListener('click', (e) => { if (!e.target.closest('.btn-sim')) { const dropdowns = document.getElementsByClassName("dropdown-content"); for (let i = 0; i < dropdowns.length; i++) { if (dropdowns[i].classList.contains('show')) dropdowns[i].classList.remove('show'); } } });
 window.askAiKey = () => { Swal.fire({ title: 'ตั้งค่า Gemini API Key', html: '<a href="https://aistudio.google.com/" target="_blank" style="color:#29b6f6">กดขอ Key ฟรีที่นี่</a>', input: 'text', inputValue: geminiApiKey, footer: geminiApiKey ? '<span style="color:lime">✅ มี Key อยู่ในเครื่องแล้ว</span>' : '' }).then(res => { if (res.value) { geminiApiKey = res.value.trim(); localStorage.setItem('geminiApiKey', geminiApiKey); Swal.fire('บันทึกแล้ว', '', 'success'); } }); };
 window.adjustZoom = (n) => { currentFontSize+=n; document.documentElement.style.setProperty('--chat-size', currentFontSize+'px'); };
 window.adjustGridZoom = (n) => { currentGridSize+=n; document.documentElement.style.setProperty('--grid-size', currentGridSize+'em'); };
@@ -653,6 +618,8 @@ window.toggleConnection = () => {
         document.getElementById('status-dot').className = "status-dot online";
     });
 };
+
+// --- Updated Dashboard Render (With Delete Button) ---
 window.renderDashboardTable = () => { 
     const dashboard = document.querySelector('.dashboard-overlay');
     const scrollY = dashboard ? dashboard.scrollTop : 0; 
@@ -674,15 +641,17 @@ window.renderDashboardTable = () => {
         const currentShipping = shippingData[currentVideoId] || {};
         const readyUids = [...allBuyerUids].filter(uid => currentShipping[uid] && currentShipping[uid].ready);
         const notReadyUids = [...allBuyerUids].filter(uid => !(currentShipping[uid] && currentShipping[uid].ready));
+        
         if (notReadyUids.length > 0) {
             const addRow = document.createElement('tr');
-            addRow.innerHTML = `<td colspan="3" style="text-align:center; padding:10px; background:#2a2a2a;"><div style="display:flex; gap:10px; justify-content:center; align-items:center;"><i class="fa-solid fa-user-plus"></i><select id="manualShipSelect" style="padding:5px; border-radius:4px; background:#444; color:#fff; border:1px solid #555; max-width:200px;"><option value="">-- เลือกลูกค้าเพื่อส่งของ --</option>${notReadyUids.map(uid => `<option value="${uid}">${savedNames[uid]?.nick || userOrders[uid].name}</option>`).join('')}</select><button class="btn btn-success" onclick="window.manualAddShipping()" style="padding:4px 10px; font-size:0.9em;">เพิ่ม</button></div></td>`;
+            addRow.innerHTML = `<td colspan="4" style="text-align:center; padding:10px; background:#2a2a2a;"><div style="display:flex; gap:10px; justify-content:center; align-items:center;"><i class="fa-solid fa-user-plus"></i><select id="manualShipSelect" style="padding:5px; border-radius:4px; background:#444; color:#fff; border:1px solid #555; max-width:200px;"><option value="">-- เลือกลูกค้าเพื่อส่งของ --</option>${notReadyUids.map(uid => `<option value="${uid}">${savedNames[uid]?.nick || userOrders[uid].name}</option>`).join('')}</select><button class="btn btn-success" onclick="window.manualAddShipping()" style="padding:4px 10px; font-size:0.9em;">เพิ่ม</button></div></td>`;
             tbody.appendChild(addRow);
         } else if (allBuyerUids.size > 0 && readyUids.length === allBuyerUids.size) {
-             const infoRow = document.createElement('tr'); infoRow.innerHTML = `<td colspan="3" style="text-align:center; color:#00e676; padding:10px;">✅ ลูกค้าทุกคนอยู่ในรายการส่งของแล้ว</td>`; tbody.appendChild(infoRow);
+             const infoRow = document.createElement('tr'); infoRow.innerHTML = `<td colspan="4" style="text-align:center; color:#00e676; padding:10px;">✅ ลูกค้าทุกคนอยู่ในรายการส่งของแล้ว</td>`; tbody.appendChild(infoRow);
         }
+
         if (readyUids.length === 0) {
-            const emptyRow = document.createElement('tr'); emptyRow.innerHTML = `<td colspan="3" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`; tbody.appendChild(emptyRow);
+            const emptyRow = document.createElement('tr'); emptyRow.innerHTML = `<td colspan="4" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`; tbody.appendChild(emptyRow);
         } else {
             let index = 1;
             readyUids.forEach(uid => {
@@ -690,13 +659,28 @@ window.renderDashboardTable = () => {
                 let custData = savedNames[uid] || { nick: order.name };
                 const tr = document.createElement('tr');
                 const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
-                tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`;
+                tr.innerHTML = `
+                    <td>${index++}</td>
+                    <td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td>
+                    <td>${itemStr}</td>
+                    <td style="text-align:center;"><button class="btn btn-dark" style="background:#d32f2f; color:white; padding:4px 8px; font-size:0.8em;" onclick="window.removeShipping('${uid}')"><i class="fa-solid fa-trash"></i></button></td>
+                `;
                 tbody.appendChild(tr);
             });
         }
         if(dashboard) dashboard.scrollTop = scrollY;
     }
 };
+
+window.removeShipping = (uid) => {
+    if(confirm('ต้องการลบลูกค้าคนนี้ออกจากรายการส่งของหรือไม่?')) {
+        update(ref(db, `shipping/${currentVideoId}/${uid}`), {ready: null})
+        .then(() => {
+            Toast.fire({ icon: 'success', title: 'ลบออกจากรายการแล้ว' });
+        });
+    }
+};
+
 window.openDashboard = () => { document.getElementById('dashboard').style.display = 'flex'; window.renderDashboardTable(); };
 window.closeDashboard = () => { document.getElementById('dashboard').style.display = 'none'; };
 window.loadHistoryList = async () => { 
@@ -712,18 +696,6 @@ window.loadHistoryList = async () => {
         window.renderHistoryPage();
     } catch(e) {
         list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
-    }
-};
-window.scrollToBottom = () => {
-    const vp = document.getElementById('chat-viewport');
-    if (vp) {
-        // Force scroll with timeout to allow UI update
-        setTimeout(() => {
-            vp.scrollTop = vp.scrollHeight;
-            isUserScrolledUp = false;
-            const btn = document.getElementById('btn-scroll-down');
-            if(btn) btn.style.display = 'none';
-        }, 50);
     }
 };
 
@@ -896,7 +868,6 @@ onAuthStateChanged(auth, user => {
             }
         });
         
-        // Broadcast Listener
         onValue(ref(db, 'system/broadcast'), (snap) => {
            const val = snap.val();
            if(val && val.time > Date.now() - 10000 && val.text) { 
