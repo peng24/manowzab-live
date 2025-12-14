@@ -1,4 +1,4 @@
-// Version: v2.2.0 | แก้ไข: เสียงซ้ำ, ประวัติไม่ขึ้น, แชทหลุด, ReferenceError
+// Version: v2.2.1 | แก้ไข: ลบเสียงพูดซ้ำซ้อนตอนยกเลิก
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import { getDatabase, ref, set, update, remove, onValue, get, serverTimestamp, query, orderByChild, runTransaction } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
@@ -296,7 +296,6 @@ function renderGrid() {
         }
     }
     Object.keys(stockData).forEach(key => { const item = stockData[key]; renderSlot(key, item); });
-    // Clear empty
     for(let i=1; i<=size; i++) { 
         if(!stockData[i]) { 
             const el = document.getElementById('stock-'+i); 
@@ -349,22 +348,9 @@ function renderChat(name, msg, type, uid, img, realName, detectionMethod = null)
     else { document.getElementById('btn-scroll-down').style.display = 'block'; }
 }
 
-async function smartFetch(url) {
-    try {
-        updateStatusIcon('stat-api', 'ok'); let res = await fetch(url + "&key=" + API_KEYS[currentKeyIdx]); let data = await res.json();
-        if (data.error) { 
-            if (currentKeyIdx < API_KEYS.length - 1) { currentKeyIdx++; return smartFetch(url); } 
-            else { Swal.fire('API Key Error', 'โควต้าเต็มทุกคีย์แล้ว', 'error'); throw new Error(data.error.message); }
-        }
-        return data;
-    } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
-}
-
 async function analyzeChatWithAI(text) {
     if (!geminiApiKey || !isAiCommander) return null;
-    const prompt = `Role: Assistant. Extract intents. Input: "${text}"`; // (Full prompt abbreviated for brevity but kept in mind)
-    // In real file, use FULL prompt from previous versions
-    const fullPrompt = `
+    const prompt = `
 Role: You are an AI assistant for a Thai live commerce clothing shop (Manowzab). 
 Your task is to extract the user's intent from their chat message.
 
@@ -403,56 +389,12 @@ Input Message: "${text}"
     try {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: fullPrompt }] }] })
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
         });
         const result = await response.json();
         const match = result.candidates?.[0]?.content?.parts?.[0]?.text?.match(/\{.*?\}/s);
         return match ? JSON.parse(match[0]) : null;
     } catch (e) { return null; }
-}
-
-async function processOrder(num, owner, uid, src, price, method = 'manual') {
-    const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
-    try {
-        await runTransaction(itemRef, (currentData) => {
-            if (currentData === null) {
-                return { owner, uid, time: Date.now(), queue: [], source: method, price: price || null };
-            } else if (!currentData.owner) {
-                currentData.owner = owner; currentData.uid = uid; currentData.time = Date.now(); currentData.source = method;
-                if(price) currentData.price = price; if(!currentData.queue) currentData.queue = [];
-                return currentData;
-            } else {
-                if (currentData.owner === owner) return; 
-                const queue = currentData.queue || [];
-                if (queue.find(q => q.owner === owner)) return; 
-                queue.push({ owner, uid, time: Date.now() });
-                currentData.queue = queue;
-                return currentData;
-            }
-        });
-        const current = stockData[num];
-        if (current && current.owner === owner) playDing();
-    } catch (e) { console.error("Transaction failed: ", e); }
-}
-
-function processCancel(num, reason) {
-    if (!stockData[num]) return;
-    const current = stockData[num];
-    if (current.queue && Array.isArray(current.queue) && current.queue.length > 0) {
-        const next = current.queue[0];
-        const nextQ = current.queue.slice(1);
-        const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
-        if (current.price) newData.price = current.price;
-        set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
-            if (reason) broadcastMessage(reason);
-            setTimeout(() => broadcastMessage(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
-        });
-    } else {
-        remove(ref(db, `stock/${currentVideoId}/${num}`)).then(() => { 
-            // Sound handled by broadcast
-            if(reason) broadcastMessage(reason);
-        });
-    }
 }
 
 async function processMessage(item) {
@@ -499,10 +441,21 @@ async function processMessage(item) {
             if (isAdmin || (stockData[targetId] && stockData[targetId].uid === uid)) {
                 const cancelMsg = `${nick} ยกเลิกรายการที่ ${targetId} ค่ะ`; 
                 processCancel(targetId, cancelMsg);
-                broadcastMessage(cancelMsg); // Ensure broadcast for chat cancel too
+                // REMOVED redundant broadcast here, processCancel handles it
             }
         }
     }
+}
+
+async function smartFetch(url) {
+    try {
+        updateStatusIcon('stat-api', 'ok'); let res = await fetch(url + "&key=" + API_KEYS[currentKeyIdx]); let data = await res.json();
+        if (data.error) { 
+            if (currentKeyIdx < API_KEYS.length - 1) { currentKeyIdx++; return smartFetch(url); } 
+            else { Swal.fire('API Key Error', 'โควต้าเต็มทุกคีย์แล้ว', 'error'); throw new Error(data.error.message); }
+        }
+        return data;
+    } catch(e) { updateStatusIcon('stat-api', 'err'); throw e; }
 }
 
 async function loadChat() {
@@ -510,7 +463,6 @@ async function loadChat() {
     const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${chatToken ? '&pageToken=' + chatToken : ''}`;
     try {
         const data = await smartFetch(url);
-        // FIX: Always update token to prevent loop
         if (data.nextPageToken) chatToken = data.nextPageToken; 
         if (data.items) { 
             updateStatusIcon('stat-chat', 'ok'); 
@@ -654,24 +606,18 @@ window.loadHistoryList = async () => {
         list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
     }
 };
-window.renderHistoryPage = () => { /* Defined above */ 
-    const list = document.getElementById('history-list');
-    list.innerHTML = '';
-    const searchText = document.getElementById('historySearchInput').value.toLowerCase();
-    const filtered = allHistoryData.filter(i => (i.title && i.title.toLowerCase().includes(searchText)) || (i.id && i.id.toLowerCase().includes(searchText)));
-    const totalPages = Math.ceil(filtered.length / historyItemsPerPage);
-    if(historyCurrentPage > totalPages) historyCurrentPage = totalPages || 1;
-    const start = (historyCurrentPage - 1) * historyItemsPerPage;
-    const end = start + historyItemsPerPage;
-    const pageItems = filtered.slice(start, end);
-    const controls = document.createElement('li');
-    controls.style.cssText = "display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; background:#1e1e1e; padding:10px; border-bottom:1px solid #333; z-index:10; margin-bottom:10px;";
-    controls.innerHTML = `<button class="btn btn-dark" ${historyCurrentPage<=1?'disabled':''} onclick="window.changeHistoryPage(-1)">◀ ย้อน</button><span style="color:#aaa; font-size:0.9em;">หน้า ${historyCurrentPage} / ${totalPages || 1} (ทั้งหมด ${filtered.length})</span><button class="btn btn-dark" ${historyCurrentPage>=totalPages?'disabled':''} onclick="window.changeHistoryPage(1)">ถัดไป ▶</button>`;
-    list.appendChild(controls);
-    if(pageItems.length === 0) { const empty = document.createElement('li'); empty.innerHTML = `<div style="text-align:center; padding:20px; color:#555;">ไม่พบรายการ</div>`; list.appendChild(empty); return; }
-    pageItems.forEach(i => { const li = document.createElement('li'); li.className = 'history-item'; li.innerHTML = `<div><span class="hist-date">${formatThaiDate(i.timestamp||0)}</span> ${i.title||i.id}</div> <button class="btn btn-dark" onclick="window.deleteHistory('${i.id}')">🗑️</button>`; li.querySelector('div').onclick = () => { window.closeHistory(); document.getElementById('vidInput').value = i.id; window.toggleConnection(); }; list.appendChild(li); });
+window.scrollToBottom = () => {
+    const vp = document.getElementById('chat-viewport');
+    if (vp) {
+        // Force scroll with timeout to allow UI update
+        setTimeout(() => {
+            vp.scrollTop = vp.scrollHeight;
+            isUserScrolledUp = false;
+            const btn = document.getElementById('btn-scroll-down');
+            if(btn) btn.style.display = 'none';
+        }, 50);
+    }
 };
-window.changeHistoryPage = (delta) => { historyCurrentPage += delta; window.renderHistoryPage(); };
 
 window.handleStockClick = (num) => {
     const current = stockData[num];
@@ -717,7 +663,7 @@ window.doAction = (num, action) => {
         const nick = stockData[num].owner || 'ลูกค้า';
         const msg = `${nick} ยกเลิกรายการที่ ${num} ค่ะ`;
         processCancel(num, msg); 
-        broadcastMessage(msg); 
+        // REMOVED: broadcastMessage(msg); <-- Cause of duplicate speech
         Toast.fire({icon: 'success', title: 'ยกเลิกรายการสำเร็จ'});
     }
 };
@@ -775,7 +721,7 @@ window.toggleSimulation = () => {
 };
 
 // ============================================================
-// 4. EXECUTION START
+// 5. EXECUTION START
 // ============================================================
 signInAnonymously(auth);
 remove(ref(db, 'stock/demo'));
@@ -842,6 +788,7 @@ onAuthStateChanged(auth, user => {
             }
         });
         
+        // Broadcast Listener
         onValue(ref(db, 'system/broadcast'), (snap) => {
            const val = snap.val();
            if(val && val.time > Date.now() - 10000 && val.text) { 
@@ -860,3 +807,7 @@ if (vp) {
         else document.getElementById('btn-scroll-down').style.display = 'block'; 
     });
 }
+
+// Add touch events for iPad audio
+document.addEventListener('touchstart', unlockAudio, { once: false });
+document.addEventListener('click', unlockAudio, { once: false });
