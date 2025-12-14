@@ -1,4 +1,4 @@
-// Version: v2.2.1 | แก้ไข: ลบเสียงพูดซ้ำซ้อนตอนยกเลิก
+// Version: v2.2.2 | แก้ไข: เสียงซ้ำ, ประวัติ, ReferenceError
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import { getDatabase, ref, set, update, remove, onValue, get, serverTimestamp, query, orderByChild, runTransaction } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
@@ -70,7 +70,7 @@ const localVer = localStorage.getItem('app_version');
 if (localVer !== AppInfo.version) {
     console.log(`Update: ${localVer} -> ${AppInfo.version}`);
     localStorage.setItem('app_version', AppInfo.version);
-    // Reload only if critical (optional, here we proceed)
+    // Reload if needed
 }
 
 // SWAL Config
@@ -83,10 +83,9 @@ const Toast = Swal.mixin({
 });
 
 // ============================================================
-// 2. ALL FUNCTIONS (DEFINED BEFORE USAGE)
+// 2. HELPER FUNCTIONS
 // ============================================================
 
-// --- 2.1 Helpers ---
 function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
 function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
 function updateStatusIcon(id, status) { const el = document.getElementById(id); if(el) { el.className = 'status-item'; el.classList.add(status); } }
@@ -118,7 +117,6 @@ function generateNameHtml(uid, realName) {
     return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
 }
 
-// --- 2.2 Audio ---
 function initAudio() {
     if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
 }
@@ -135,7 +133,6 @@ function unlockAudio() {
     isAudioUnlocked = true;
     console.log("🔊 Audio Unlocked");
 }
-// Attach events
 if (typeof document !== 'undefined') {
     ['click', 'touchstart', 'keydown'].forEach(evt => document.addEventListener(evt, unlockAudio, { once: false }));
 }
@@ -187,7 +184,6 @@ function playCancel() {
 }
 setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
-// --- 2.3 Init Helpers ---
 function initVersionControl() {
     const badge = document.querySelector('.version-badge');
     if (badge) {
@@ -238,7 +234,6 @@ function syncAiCommanderStatus() {
     });
 }
 
-// --- 2.4 Data & Logic ---
 function updateStats() { 
     const total = parseInt(document.getElementById('stockSize').value) || 70;
     const soldCount = Object.keys(stockData).filter(k => stockData[k].owner).length; 
@@ -441,9 +436,51 @@ async function processMessage(item) {
             if (isAdmin || (stockData[targetId] && stockData[targetId].uid === uid)) {
                 const cancelMsg = `${nick} ยกเลิกรายการที่ ${targetId} ค่ะ`; 
                 processCancel(targetId, cancelMsg);
-                // REMOVED redundant broadcast here, processCancel handles it
+                broadcastMessage(cancelMsg); // Only broadcast here for chat trigger
             }
         }
+    }
+}
+
+async function processOrder(num, owner, uid, src, price, method = 'manual') {
+    const itemRef = ref(db, `stock/${currentVideoId}/${num}`);
+    try {
+        await runTransaction(itemRef, (currentData) => {
+            if (currentData === null) {
+                return { owner, uid, time: Date.now(), queue: [], source: method, price: price || null };
+            } else if (!currentData.owner) {
+                currentData.owner = owner; currentData.uid = uid; currentData.time = Date.now(); currentData.source = method;
+                if(price) currentData.price = price; if(!currentData.queue) currentData.queue = [];
+                return currentData;
+            } else {
+                if (currentData.owner === owner) return; 
+                const queue = currentData.queue || [];
+                if (queue.find(q => q.owner === owner)) return; 
+                queue.push({ owner, uid, time: Date.now() });
+                currentData.queue = queue;
+                return currentData;
+            }
+        });
+        const current = stockData[num];
+        if (current && current.owner === owner) playDing();
+    } catch (e) { console.error("Transaction failed: ", e); }
+}
+
+function processCancel(num, reason) {
+    if (!stockData[num]) return;
+    const current = stockData[num];
+    if (current.queue && Array.isArray(current.queue) && current.queue.length > 0) {
+        const next = current.queue[0];
+        const nextQ = current.queue.slice(1);
+        const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
+        if (current.price) newData.price = current.price;
+        set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
+            // Note: Broadcast is handled by caller (doAction or processMessage) OR listener
+            // We rely on caller to broadcast reason, and listener to speak it.
+            setTimeout(() => broadcastMessage(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
+        });
+    } else {
+        remove(ref(db, `stock/${currentVideoId}/${num}`)); // Simply remove, sound handled by listener
     }
 }
 
@@ -568,13 +605,13 @@ window.renderDashboardTable = () => {
         const notReadyUids = [...allBuyerUids].filter(uid => !(currentShipping[uid] && currentShipping[uid].ready));
         if (notReadyUids.length > 0) {
             const addRow = document.createElement('tr');
-            addRow.innerHTML = `<td colspan="3" style="text-align:center; padding:10px; background:#2a2a2a;"><div style="display:flex; gap:10px; justify-content:center; align-items:center;"><i class="fa-solid fa-user-plus"></i><select id="manualShipSelect" style="padding:5px; border-radius:4px; background:#444; color:#fff; border:1px solid #555; max-width:200px;"><option value="">-- เลือกลูกค้าเพื่อส่งของ --</option>${notReadyUids.map(uid => `<option value="${uid}">${savedNames[uid]?.nick || userOrders[uid].name}</option>`).join('')}</select><button class="btn btn-success" onclick="window.manualAddShipping()" style="padding:4px 10px; font-size:0.9em;">เพิ่ม</button></div></td>`;
+            addRow.innerHTML = `<td colspan="4" style="text-align:center; padding:10px; background:#2a2a2a;"><div style="display:flex; gap:10px; justify-content:center; align-items:center;"><i class="fa-solid fa-user-plus"></i><select id="manualShipSelect" style="padding:5px; border-radius:4px; background:#444; color:#fff; border:1px solid #555; max-width:200px;"><option value="">-- เลือกลูกค้าเพื่อส่งของ --</option>${notReadyUids.map(uid => `<option value="${uid}">${savedNames[uid]?.nick || userOrders[uid].name}</option>`).join('')}</select><button class="btn btn-success" onclick="window.manualAddShipping()" style="padding:4px 10px; font-size:0.9em;">เพิ่ม</button></div></td>`;
             tbody.appendChild(addRow);
         } else if (allBuyerUids.size > 0 && readyUids.length === allBuyerUids.size) {
-             const infoRow = document.createElement('tr'); infoRow.innerHTML = `<td colspan="3" style="text-align:center; color:#00e676; padding:10px;">✅ ลูกค้าทุกคนอยู่ในรายการส่งของแล้ว</td>`; tbody.appendChild(infoRow);
+             const infoRow = document.createElement('tr'); infoRow.innerHTML = `<td colspan="4" style="text-align:center; color:#00e676; padding:10px;">✅ ลูกค้าทุกคนอยู่ในรายการส่งของแล้ว</td>`; tbody.appendChild(infoRow);
         }
         if (readyUids.length === 0) {
-            const emptyRow = document.createElement('tr'); emptyRow.innerHTML = `<td colspan="3" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`; tbody.appendChild(emptyRow);
+            const emptyRow = document.createElement('tr'); emptyRow.innerHTML = `<td colspan="4" style="text-align:center; color:#888; padding:20px;">ยังไม่มีรายการที่แจ้งพร้อมส่ง</td>`; tbody.appendChild(emptyRow);
         } else {
             let index = 1;
             readyUids.forEach(uid => {
@@ -582,13 +619,28 @@ window.renderDashboardTable = () => {
                 let custData = savedNames[uid] || { nick: order.name };
                 const tr = document.createElement('tr');
                 const itemStr = order.items.map(i => '#' + i.num + (i.price > 0 ? '('+i.price+')' : '')).join(', ');
-                tr.innerHTML = `<td>${index++}</td><td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td><td>${itemStr}</td>`;
+                tr.innerHTML = `
+                    <td>${index++}</td>
+                    <td><input class="edit-input" value="${custData.nick||order.name}" onchange="window.updateNickSilent('${uid}', this.value)" placeholder="พิมพ์ชื่อแล้ว Enter"></td>
+                    <td>${itemStr}</td>
+                    <td style="text-align:center;"><button class="btn btn-dark" style="background:#d32f2f; color:white; padding:4px 8px; font-size:0.8em;" onclick="window.removeShipping('${uid}')"><i class="fa-solid fa-trash"></i></button></td>
+                `;
                 tbody.appendChild(tr);
             });
         }
         if(dashboard) dashboard.scrollTop = scrollY;
     }
 };
+
+window.removeShipping = (uid) => {
+    if(confirm('ต้องการลบลูกค้าคนนี้ออกจากรายการส่งของหรือไม่?')) {
+        update(ref(db, `shipping/${currentVideoId}/${uid}`), {ready: null})
+        .then(() => {
+            Toast.fire({ icon: 'success', title: 'ลบออกจากรายการแล้ว' });
+        });
+    }
+};
+
 window.openDashboard = () => { document.getElementById('dashboard').style.display = 'flex'; window.renderDashboardTable(); };
 window.closeDashboard = () => { document.getElementById('dashboard').style.display = 'none'; };
 window.loadHistoryList = async () => { 
@@ -604,18 +656,6 @@ window.loadHistoryList = async () => {
         window.renderHistoryPage();
     } catch(e) {
         list.innerHTML = `<li style="color:red; text-align:center;">โหลดไม่สำเร็จ: ${e.message}</li>`;
-    }
-};
-window.scrollToBottom = () => {
-    const vp = document.getElementById('chat-viewport');
-    if (vp) {
-        // Force scroll with timeout to allow UI update
-        setTimeout(() => {
-            vp.scrollTop = vp.scrollHeight;
-            isUserScrolledUp = false;
-            const btn = document.getElementById('btn-scroll-down');
-            if(btn) btn.style.display = 'none';
-        }, 50);
     }
 };
 
@@ -663,7 +703,7 @@ window.doAction = (num, action) => {
         const nick = stockData[num].owner || 'ลูกค้า';
         const msg = `${nick} ยกเลิกรายการที่ ${num} ค่ะ`;
         processCancel(num, msg); 
-        // REMOVED: broadcastMessage(msg); <-- Cause of duplicate speech
+        broadcastMessage(msg); 
         Toast.fire({icon: 'success', title: 'ยกเลิกรายการสำเร็จ'});
     }
 };
@@ -788,7 +828,6 @@ onAuthStateChanged(auth, user => {
             }
         });
         
-        // Broadcast Listener
         onValue(ref(db, 'system/broadcast'), (snap) => {
            const val = snap.val();
            if(val && val.time > Date.now() - 10000 && val.text) { 
