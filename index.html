@@ -4,7 +4,7 @@
     <base target="_top">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Manowzab Command Center V2.1.3 (Safe Mode)</title>
+    <title>Manowzab Command Center V2.2.3 (Stable)</title>
     
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -26,7 +26,7 @@
                 <span id="stat-key" class="key-indicator" title="API Key"><i class="fa-solid fa-key"></i> 1</span>
             </div>
             
-            <button class="btn btn-voice" id="btnVoice">🎙️</button>
+            <!-- Voice Button Removed -->
             <button class="btn btn-ai inactive" id="btnAICommander" onclick="window.toggleAICommander()">🤖 AI: ปิด</button>
             <button class="btn btn-dark" onclick="window.openHistory()">🕒</button>
             <button id="btn-shipping" class="btn btn-shipping empty" onclick="window.openDashboard()">🚚 (0)</button>
@@ -35,7 +35,7 @@
             <button class="btn btn-primary" id="btnConnect" onclick="window.toggleConnection()">CONNECT</button>
             
             <div class="dropdown">
-                <button class="btn btn-sim" onclick="window.toggleDropdown()">⚡ Tools <i class="fa-solid fa-caret-down"></i></button>
+                <button class="btn btn-sim" onclick="window.toggleDropdown(event)">⚡ Tools <i class="fa-solid fa-caret-down"></i></button>
                 <div id="toolsDropdown" class="dropdown-content">
                     <a onclick="window.testVoice()">🔊 ทดสอบเสียง</a>
                     <a onclick="window.toggleFullScreen()">📺 เต็มจอ (iPad)</a>
@@ -50,7 +50,7 @@
             <div class="status-dot" id="status-dot"></div>
             <div class="live-viewers" id="view-counter">👁️ 0</div>
             <div class="live-title" id="live-title">Offline Mode</div>
-            <div class="version-badge" style="margin-left: auto;">V2.1.3</div>
+            <div class="version-badge" style="margin-left: auto;">V2.2.3</div>
         </div>
     </div>
 
@@ -90,7 +90,7 @@
 
         <div id="dashboard" class="dashboard-overlay">
             <div class="dashboard-header"><div class="dash-title">🚚 คิวจัดส่ง (รอบปัจจุบัน)</div><button class="btn btn-dark" onclick="window.closeDashboard()">ปิด</button></div>
-            <div style="overflow-x:auto;"><table class="shipping-table"><thead><tr><th>ลำดับ</th><th>ลูกค้า (แก้ไขได้)</th><th>รายการ</th></tr></thead><tbody id="shipping-body"></tbody></table></div>
+            <div style="overflow-x:auto;"><table class="shipping-table"><thead><tr><th>ลำดับ</th><th>ลูกค้า (แก้ไขได้)</th><th>รายการ</th><th>จัดการ</th></tr></thead><tbody id="shipping-body"></tbody></table></div>
         </div>
         <div id="history-modal" class="dashboard-overlay">
             <div class="dashboard-header"><div class="dash-title">🕒 ประวัติการไลฟ์</div><button class="btn btn-dark" onclick="window.closeHistory()">ปิด</button></div>
