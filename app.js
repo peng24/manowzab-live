@@ -1,4 +1,4 @@
-// Version: v2.2.2 | แก้ไข: เสียงซ้ำ, ประวัติ, ReferenceError
+// Version: v2.2.3 | แก้ไข: ลบปุ่มเสียง, แก้จองไม่ได้, แชทครบ
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import { getDatabase, ref, set, update, remove, onValue, get, serverTimestamp, query, orderByChild, runTransaction } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
@@ -70,7 +70,7 @@ const localVer = localStorage.getItem('app_version');
 if (localVer !== AppInfo.version) {
     console.log(`Update: ${localVer} -> ${AppInfo.version}`);
     localStorage.setItem('app_version', AppInfo.version);
-    // Reload if needed
+    window.location.reload(true);
 }
 
 // SWAL Config
@@ -83,9 +83,10 @@ const Toast = Swal.mixin({
 });
 
 // ============================================================
-// 2. HELPER FUNCTIONS
+// 2. ALL FUNCTIONS (DEFINED BEFORE USAGE)
 // ============================================================
 
+// --- 2.1 Helpers ---
 function stringToColor(str) { var hash = 0; for (var i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash); return 'hsl(' + (Math.abs(hash) % 360) + ', 85%, 75%)'; }
 function escapeHtml(text) { if (!text) return ""; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
 function updateStatusIcon(id, status) { const el = document.getElementById(id); if(el) { el.className = 'status-item'; el.classList.add(status); } }
@@ -117,6 +118,7 @@ function generateNameHtml(uid, realName) {
     return `<span class="badge-real ${vipClass}" style="color:${color}" data-val="${escapeHtml(realName)}" onclick="window.askName('${uid}', this.getAttribute('data-val'))">${realName}</span>`;
 }
 
+// --- 2.2 Audio ---
 function initAudio() {
     if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
 }
@@ -184,6 +186,7 @@ function playCancel() {
 }
 setInterval(() => { if (!synth.speaking && speechQueue.length > 0 && !isSpeaking) processQueue(); }, 1000);
 
+// --- 2.3 Init Helpers ---
 function initVersionControl() {
     const badge = document.querySelector('.version-badge');
     if (badge) {
@@ -215,7 +218,7 @@ function initStatusIcons() {
 
 function initTooltips() {
     const tips = {
-        'btnVoice': 'สั่งงานด้วยเสียง', 'btnAICommander': 'ระบบ AI ช่วยจอง', 'btn-shipping': 'รายการพร้อมส่ง',
+        'btnAICommander': 'ระบบ AI ช่วยจอง', 'btn-shipping': 'รายการพร้อมส่ง',
         'btnConnect': 'เชื่อมต่อ YouTube', 'btnSound': 'เปิด/ปิดเสียง', 'stockSize': 'จำนวนรายการ'
     };
     for(const [id, text] of Object.entries(tips)) { const el = document.getElementById(id); if(el) el.title = text; }
@@ -234,6 +237,7 @@ function syncAiCommanderStatus() {
     });
 }
 
+// --- 2.4 Data & Logic ---
 function updateStats() { 
     const total = parseInt(document.getElementById('stockSize').value) || 70;
     const soldCount = Object.keys(stockData).filter(k => stockData[k].owner).length; 
@@ -475,12 +479,11 @@ function processCancel(num, reason) {
         const newData = { owner: next.owner, uid: next.uid, time: Date.now(), queue: nextQ, source: 'queue' };
         if (current.price) newData.price = current.price;
         set(ref(db, `stock/${currentVideoId}/${num}`), newData).then(() => {
-            // Note: Broadcast is handled by caller (doAction or processMessage) OR listener
-            // We rely on caller to broadcast reason, and listener to speak it.
+            // Speech handled by broadcastMessage from caller
             setTimeout(() => broadcastMessage(`คุณ ${next.owner} ได้สิทธิ์ต่อค่ะ`), 2500);
         });
     } else {
-        remove(ref(db, `stock/${currentVideoId}/${num}`)); // Simply remove, sound handled by listener
+        remove(ref(db, `stock/${currentVideoId}/${num}`)); // Speech handled by broadcastMessage from caller
     }
 }
 
