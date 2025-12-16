@@ -848,6 +848,7 @@ async function smartFetch(url) {
     if (data.error) {
       if (currentKeyIdx < API_KEYS.length - 1) {
         currentKeyIdx++;
+        updateKeyDisplay(); // <--- เพิ่มบรรทัดนี้เข้าไปค่ะ
         return smartFetch(url);
       } else {
         Swal.fire("API Key Error", "โควต้าเต็มทุกคีย์แล้ว", "error");
