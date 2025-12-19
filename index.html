@@ -7,7 +7,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
-    <title>Manowzab Command Center V2.2.3 (Stable)</title>
+    <title>Manowzab Command Center V2.2.6</title>
 
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -82,6 +82,11 @@
             ⚡ Tools <i class="fa-solid fa-caret-down"></i>
           </button>
           <div id="toolsDropdown" class="dropdown-content">
+            <!-- [NEW] ปุ่มบันทึกแชท -->
+            <a onclick="window.downloadChatCSV()" style="color: #ffd700"
+              ><i class="fa-solid fa-file-csv"></i> บันทึกแชท (CSV)</a
+            >
+
             <a onclick="window.testVoice()">🔊 ทดสอบเสียง</a>
             <a onclick="window.toggleFullScreen()">📺 เต็มจอ (iPad)</a>
             <a onclick="window.toggleAwayMode()">🌙 โหมดพาลูกนอน</a>
@@ -97,7 +102,7 @@
         <div class="status-dot" id="status-dot"></div>
         <div class="live-viewers" id="view-counter">👁️ 0</div>
         <div class="live-title" id="live-title">Offline Mode</div>
-        <div class="version-badge" style="margin-left: auto">V2.2.3</div>
+        <div class="version-badge" style="margin-left: auto">V2.2.6</div>
       </div>
     </div>
 

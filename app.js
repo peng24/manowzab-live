@@ -1,4 +1,4 @@
-// Version: v2.2.5 | แก้ไข: อ่านออกเสียง Emoji ว่า "ส่งอีโมจิ"
+// Version: v2.2.6 | เพิ่มฟังชั่นบันทึกแชท CSV
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import {
   getDatabase,
@@ -67,6 +67,10 @@ let unsubscribeStock, unsubscribeSystem;
 let currentFontSize = 16;
 let currentGridSize = 1;
 let isUserScrolledUp = false;
+
+// --- [NEW] Chat Log Variables ---
+let fullChatLog = []; // เก็บข้อมูลแชททั้งหมด
+let streamStartTime = null; // เก็บเวลาเริ่มไลฟ์เพื่อคำนวณ Video Time
 
 // Audio
 let audioCtx = null;
@@ -646,6 +650,45 @@ async function processMessage(item) {
   if (!item.snippet || !item.authorDetails) return;
   if (seenMessageIds[item.id]) return;
   seenMessageIds[item.id] = true;
+
+  // --- [NEW] Log Chat Data ---
+  try {
+    const msgDate = new Date(item.snippet.publishedAt);
+    const msgTimeStr = msgDate.toLocaleString("en-US"); // 12/18/2025, 8:17:56 PM
+
+    // คำนวณ Video time (นาที:วินาที)
+    let videoTimeStr = "0:00";
+    if (streamStartTime) {
+      const diffMs = msgDate.getTime() - streamStartTime;
+      if (diffMs > 0) {
+        const totalSeconds = Math.floor(diffMs / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        const secStr = seconds.toString().padStart(2, "0");
+        if (hours > 0) {
+          videoTimeStr = `${hours}:${minutes
+            .toString()
+            .padStart(2, "0")}:${secStr}`;
+        } else {
+          videoTimeStr = `${minutes}:${secStr}`;
+        }
+      }
+    }
+
+    fullChatLog.push({
+      id: item.id,
+      author: item.authorDetails.displayName,
+      comment: item.snippet.displayMessage,
+      videoTime: videoTimeStr,
+      messageTime: `"${msgTimeStr}"`,
+    });
+  } catch (err) {
+    console.error("Error logging chat:", err);
+  }
+  // ---------------------------
+
   const msg = item.snippet.displayMessage || "";
   if (!msg) return;
   const uid = item.authorDetails.channelId;
@@ -922,6 +965,20 @@ async function connectYoutube(vid) {
     const item = d.items[0];
     document.getElementById("live-title").innerText = item.snippet.title;
     saveHistory(vid, item.snippet.title);
+
+    // [NEW] Set Stream Start Time
+    if (
+      item.liveStreamingDetails &&
+      item.liveStreamingDetails.actualStartTime
+    ) {
+      streamStartTime = new Date(
+        item.liveStreamingDetails.actualStartTime
+      ).getTime();
+    } else {
+      streamStartTime = Date.now();
+    }
+    fullChatLog = []; // Reset Chat Log
+
     queueSpeech("เชื่อมต่อสำเร็จ กำลังอ่านคอมเมนต์จาก " + item.snippet.title);
     isConnected = true;
     setLoading(false);
@@ -1461,7 +1518,10 @@ window.toggleSimulation = () => {
       const rNum = Math.floor(Math.random() * size) + 1;
       processMessage({
         id: "sim-" + Date.now(),
-        snippet: { displayMessage: `F${rNum}` },
+        snippet: {
+          displayMessage: `F${rNum}`,
+          publishedAt: new Date().toISOString(),
+        }, // Add Time
         authorDetails: {
           channelId: "sim",
           displayName: "SimUser",
@@ -1474,6 +1534,39 @@ window.toggleSimulation = () => {
     clearInterval(simIntervalId);
   }
 };
+
+// --- [NEW] Download CSV Function ---
+window.downloadChatCSV = () => {
+  if (fullChatLog.length === 0) {
+    Swal.fire("ไม่มีข้อมูล", "ยังไม่มีข้อความแชทเข้ามา", "warning");
+    return;
+  }
+
+  // สร้าง Header
+  let csvContent = "\uFEFFId,Author name,Comment,Video time,Message time\n";
+
+  // วนลูปสร้างแต่ละแถว
+  fullChatLog.forEach((row) => {
+    // Escape เครื่องหมาย " ในคอมเมนต์ ให้เป็น "" เพื่อไม่ให้ CSV พัง
+    const safeComment = row.comment ? row.comment.replace(/"/g, '""') : "";
+    const safeAuthor = row.author ? row.author.replace(/"/g, '""') : "";
+
+    // จัดรูปแบบแถว: Id, "Author", "Comment", VideoTime, "MessageTime"
+    csvContent += `${row.id},"${safeAuthor}","${safeComment}",${row.videoTime},${row.messageTime}\n`;
+  });
+
+  // สร้างไฟล์และดาวน์โหลด
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.setAttribute("href", url);
+  link.setAttribute("download", `chat_log_${currentVideoId || "live"}.csv`);
+  link.style.visibility = "hidden";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+// ------------------------------------
 
 // ============================================================
 // 5. EXECUTION START
