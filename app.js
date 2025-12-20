@@ -1,4 +1,4 @@
-// Version: v2.2.6 | เพิ่มฟังชั่นบันทึกแชท CSV
+// Version: v3.0.1 | แก้ไขปุ่ม AI Commander กดไม่ได้ และแชทไม่ขึ้น
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import {
   getDatabase,
@@ -12,6 +12,9 @@ import {
   query,
   orderByChild,
   runTransaction,
+  limitToLast,
+  onChildAdded,
+  off,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
 import {
   getAuth,
@@ -64,13 +67,17 @@ let chatToken = "";
 let lastScrollTimestamp = 0;
 let unsubscribeStock, unsubscribeSystem;
 
+// V3 API Economy Variables
+let unsubscribeChatStream = null;
+let isUsingRelay = false;
+
 let currentFontSize = 16;
 let currentGridSize = 1;
 let isUserScrolledUp = false;
 
-// --- [NEW] Chat Log Variables ---
-let fullChatLog = []; // เก็บข้อมูลแชททั้งหมด
-let streamStartTime = null; // เก็บเวลาเริ่มไลฟ์เพื่อคำนวณ Video Time
+// Chat Log Variables
+let fullChatLog = [];
+let streamStartTime = null;
 
 // Audio
 let audioCtx = null;
@@ -385,18 +392,50 @@ function syncAiCommanderStatus() {
     const commanderId = snap.val();
     const btn = document.getElementById("btnAICommander");
     if (!btn) return;
+
+    const oldIsAiCommander = isAiCommander; // เก็บสถานะเก่า
+
     if (commanderId === myDeviceId) {
       isAiCommander = true;
       btn.innerHTML = "🤖 AI: เปิด (Commander)";
       btn.className = "btn btn-ai active";
     } else if (commanderId) {
       isAiCommander = false;
-      btn.innerHTML = "🤖 AI: ปิด (เครื่องอื่นคุม)";
+      btn.innerHTML = "🤖 AI: ปิด (Viewer)";
       btn.className = "btn btn-ai remote";
     } else {
       isAiCommander = false;
       btn.innerHTML = "🤖 AI: ปิด";
       btn.className = "btn btn-ai inactive";
+    }
+
+    // [NEW] Dynamic Switching Logic for API Economy
+    if (isConnected && activeChatId) {
+      if (isAiCommander && !oldIsAiCommander) {
+        // Switch to Commander
+        console.log("Switching to Commander Mode (YouTube API)");
+        if (unsubscribeChatStream) {
+          unsubscribeChatStream();
+          unsubscribeChatStream = null;
+        }
+        isUsingRelay = false;
+        updateStatusIcon("stat-chat", "ok");
+        loadChat();
+        Toast.fire({
+          icon: "info",
+          title: "เปลี่ยนเป็นโหมด Commander (ดึงแชทเอง)",
+        });
+      } else if (!isAiCommander && oldIsAiCommander) {
+        // Switch to Viewer
+        console.log("Switching to Viewer Mode (Firebase Relay)");
+        if (chatTimeoutId) clearTimeout(chatTimeoutId);
+        isUsingRelay = true;
+        subscribeToChatStream(activeChatId);
+        Toast.fire({
+          icon: "success",
+          title: "เปลี่ยนเป็นโหมด Viewer (รับแชทจากแม่ข่าย)",
+        });
+      }
     }
   });
 }
@@ -646,17 +685,30 @@ Input Message: "${text}"
   }
 }
 
+// [ปรับปรุง] เพิ่มฟังก์ชันช่วยจัดการสถานะส่งของ (แยกออกมาเพื่อให้เรียกใช้ได้ทั้ง AI และ Regex)
+function markAsReadyToShip(uid, nick) {
+  const shipPath = `shipping/${currentVideoId}/${uid}`;
+  // อัปเดตสถานะเป็น ready: true
+  update(ref(db, shipPath), { ready: true, timestamp: Date.now() }).then(() => {
+    // แจ้งเตือนเสียง
+    queueSpeech(nick + " แจ้งส่งของค่ะ");
+    // [Optional] อาจจะเพิ่มการตอบกลับในแชทหรือ Toast เตือนที่หน้าจอแอดมินด้วยก็ได้
+    Toast.fire({ icon: "success", title: `${nick} แจ้งส่งของ` });
+  });
+}
+
+// ============================================================
+// MODIFIED PROCESS MESSAGE FUNCTION
+// ============================================================
 async function processMessage(item) {
   if (!item.snippet || !item.authorDetails) return;
   if (seenMessageIds[item.id]) return;
   seenMessageIds[item.id] = true;
 
-  // --- [NEW] Log Chat Data ---
+  // --- Log Chat Data (เหมือนเดิม) ---
   try {
     const msgDate = new Date(item.snippet.publishedAt);
-    const msgTimeStr = msgDate.toLocaleString("en-US"); // 12/18/2025, 8:17:56 PM
-
-    // คำนวณ Video time (นาที:วินาที)
+    const msgTimeStr = msgDate.toLocaleString("en-US");
     let videoTimeStr = "0:00";
     if (streamStartTime) {
       const diffMs = msgDate.getTime() - streamStartTime;
@@ -665,18 +717,13 @@ async function processMessage(item) {
         const hours = Math.floor(totalSeconds / 3600);
         const minutes = Math.floor((totalSeconds % 3600) / 60);
         const seconds = totalSeconds % 60;
-
         const secStr = seconds.toString().padStart(2, "0");
-        if (hours > 0) {
-          videoTimeStr = `${hours}:${minutes
-            .toString()
-            .padStart(2, "0")}:${secStr}`;
-        } else {
-          videoTimeStr = `${minutes}:${secStr}`;
-        }
+        videoTimeStr =
+          hours > 0
+            ? `${hours}:${minutes.toString().padStart(2, "0")}:${secStr}`
+            : `${minutes}:${secStr}`;
       }
     }
-
     fullChatLog.push({
       id: item.id,
       author: item.authorDetails.displayName,
@@ -701,10 +748,13 @@ async function processMessage(item) {
         : savedNames[uid];
   const isAdmin = /admin|แอดมิน/i.test(nick);
   let stockSize = parseInt(document.getElementById("stockSize").value) || 70;
+
   let intent = null,
     targetId = null,
     targetPrice = null,
     method = null;
+
+  // 1. AI Logic (คงเดิมแต่เรียกใช้ helper function)
   if (isAiCommander) {
     const aiResult = await analyzeChatWithAI(msg);
     if (aiResult) {
@@ -718,26 +768,46 @@ async function processMessage(item) {
         targetId = aiResult.id;
         method = "ai";
       } else if (aiResult.intent === "shipping") {
-        const shipPath = `shipping/${currentVideoId}/${uid}`;
-        update(ref(db, shipPath), { ready: true, timestamp: Date.now() }).then(
-          () => queueSpeech(nick + " แจ้งส่งของ")
-        );
+        markAsReadyToShip(uid, nick); // เรียกใช้ Helper
         method = "ai";
       } else if (aiResult.intent === "question") {
         method = "ai-skip";
       }
     }
   }
+
+  // 2. Regex Logic (ปรับปรุงใหม่)
   if (!method) {
+    // [IMPROVED REGEX]
+    // รองรับ Space หรือ Non-Word Characters (สัญลักษณ์, Emoji) เป็นตัวคั่นหน้าตัวเลข
+    // ตัวอย่างที่รองรับ: "F10", "10", "กุ้ง-20", "😱26", "10=100"
     const buyRegex =
-      /(?:^|[\s])(?:F|f|cf|CF|รับ|เอา)?\s*(\d+)(?:[\s=\/]+(\d+))?(?:$|[\s])/;
+      /(?:^|[\s\p{P}\p{S}])(?:F|f|cf|CF|รับ|เอา)?\s*(\d+)(?:[\s=\/]+(\d+))?(?:$|[\s\p{P}\p{S}])/u;
+
+    // Regex สำหรับยกเลิก
     const cancelRegex =
-      /(?:^|[\s])(?:cc|CC|cancel|ยกเลิก|ไม่เอา|ปล่อย|หลุด)\s*(\d+)(?:$|[\s])/i;
+      /(?:^|[\s\p{P}\p{S}])(?:cc|CC|cancel|ยกเลิก|ไม่เอา|ปล่อย|หลุด)\s*(\d+)(?:$|[\s\p{P}\p{S}])/iu;
+
+    // Regex สำหรับคำถาม (เพิ่มคำว่า "อะไร", "ป่าว", "มั้ย", "ขอดู")
     const isQuestion =
-      /อก|เอว|ยาว|ราคา|เท่าไหร่|ทไหร|กี่บาท|แบบไหน|ผ้า|สี|ตำหนิ|ไหม/i.test(msg);
+      /อก|เอว|ยาว|ราคา|เท่าไหร่|ทไหร|กี่บาท|แบบไหน|ผ้า|สี|ตำหนิ|ไหม|มั้ย|มั๊ย|อะไร|ป่าว|ขอดู|จริงดิ/i.test(
+        msg
+      );
+
+    // [NEW] Regex สำหรับแจ้งส่งของ
+    const isShipping =
+      /(?:^|[\s])(?:ส่งเลย|พร้อมส่ง|สรุปยอด|เก็บเงิน|เช็คยอด|ปิดยอด)(?:$|[\s])/i.test(
+        msg
+      );
+
     const cMatch = msg.match(cancelRegex);
     const bMatch = msg.match(buyRegex);
-    if (cMatch) {
+
+    if (isShipping) {
+      // เพิ่ม Logic แจ้งส่งของแบบไม่ต้องพึ่ง AI
+      markAsReadyToShip(uid, nick);
+      method = "regex-shipping";
+    } else if (cMatch) {
       intent = "cancel";
       targetId = parseInt(cMatch[1]);
       method = "regex";
@@ -748,6 +818,8 @@ async function processMessage(item) {
       method = "regex";
     }
   }
+
+  // --- Rendering ---
   renderChat(
     nick,
     msg,
@@ -758,23 +830,22 @@ async function processMessage(item) {
     method
   );
 
-  // --- UPDATED SPEECH LOGIC: Replace Emojis with "ส่งอีโมจิ" ---
-  // จับกลุ่ม Emoji ที่ติดกันหลายตัวให้เป็นก้อนเดียว แล้วแทนที่ด้วยคำว่า " ส่งอีโมจิ "
+  // --- Speech Processing ---
   let speakMsg = msg.replace(
     /(?:[\u2700-\u27BF]|[\uE000-\uF8FF]|[\uD83C-\uD83E][\uDC00-\uDFFF]|[\u2011-\u26FF])+/g,
     " ส่งอีโมจิ "
   );
-
-  // Clean up other symbols but keep the replacement
   speakMsg = speakMsg.replace(
     /([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g,
     ""
-  ); // Safety cleanup for leftover singles
+  );
 
   if (speakMsg.trim().length > 0 && speakMsg.length < 100)
     queueSpeech(nick + " ... " + speakMsg);
 
-  if (method === "ai-skip") return;
+  if (method === "ai-skip" || method === "regex-shipping") return; // ถ้าเป็นแค่ส่งของ หรือ AI บอกข้าม ไม่ต้องไปทำ processOrder
+
+  // --- Order Processing ---
   if (targetId && targetId > 0) {
     if (targetId > stockSize) {
       stockSize = targetId;
@@ -784,6 +855,7 @@ async function processMessage(item) {
       let ownerName = nick,
         ownerUid = uid;
       if (isAdmin) {
+        // Logic สำหรับแอดมินคีย์แทนลูกค้า
         let cleanName = msg;
         cleanName = cleanName
           .replace(targetId.toString(), "")
@@ -811,7 +883,7 @@ async function processMessage(item) {
       if (isAdmin || (stockData[targetId] && stockData[targetId].uid === uid)) {
         const cancelMsg = `${nick} ยกเลิกรายการที่ ${targetId} ค่ะ`;
         processCancel(targetId, cancelMsg);
-        broadcastMessage(cancelMsg); // Only broadcast here for chat trigger
+        broadcastMessage(cancelMsg);
       }
     }
   }
@@ -891,7 +963,7 @@ async function smartFetch(url) {
     if (data.error) {
       if (currentKeyIdx < API_KEYS.length - 1) {
         currentKeyIdx++;
-        updateKeyDisplay(); // <--- เพิ่มบรรทัดนี้เข้าไปค่ะ
+        updateKeyDisplay();
         return smartFetch(url);
       } else {
         Swal.fire("API Key Error", "โควต้าเต็มทุกคีย์แล้ว", "error");
@@ -907,17 +979,29 @@ async function smartFetch(url) {
 
 async function loadChat() {
   if (!isConnected || !activeChatId) return;
+
+  // [NEW] Safety Check: ถ้าไม่ใช่ Commander และเชื่อมต่อแล้ว ให้หยุดยิง API (เผื่อ logic หลุด)
+  if (!isAiCommander && isConnected) {
+    console.warn("Viewer accidentally in loadChat loop. Stopping.");
+    return;
+  }
+
   if (isSimulating) return;
+
   const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails${
     chatToken ? "&pageToken=" + chatToken : ""
   }`;
+
   try {
     const data = await smartFetch(url);
     if (data.items) {
       updateStatusIcon("stat-chat", "ok");
       for (const item of data.items) {
         try {
+          // 1. Process Locally
           await processMessage(item);
+          // [NEW] 2. Relay to Firebase for Viewers
+          set(ref(db, `system/chatStream/${activeChatId}/${item.id}`), item);
         } catch (err) {
           console.error("Msg Error:", err, item);
         }
@@ -930,6 +1014,38 @@ async function loadChat() {
     console.error("Load Chat Error:", e);
     updateStatusIcon("stat-chat", "err");
     chatTimeoutId = setTimeout(loadChat, 10000);
+  }
+}
+
+// [NEW] ฟังก์ชันสำหรับ Viewer ฟังแชทจาก Firebase แทน YouTube API
+function subscribeToChatStream(chatId) {
+  if (unsubscribeChatStream) unsubscribeChatStream();
+
+  // ฟังแชทใหม่ๆ เท่านั้น (limitToLast เพื่อไม่ให้โหลดประวัติเก่าเกินไปจนเครื่องค้าง)
+  const chatRef = query(
+    ref(db, `system/chatStream/${chatId}`),
+    limitToLast(50)
+  );
+
+  unsubscribeChatStream = onChildAdded(chatRef, (snapshot) => {
+    const item = snapshot.val();
+    // เรียก processMessage เพื่อ render และทำงาน (แต่ถ้าเป็น Viewer มันจะไม่รัน AI ซ้ำตาม Logic ใน processMessage)
+    processMessage(item);
+    // อัปเดตไอคอนเพื่อให้รู้ว่าระบบทำงาน (ใช้สีเขียวแบบประหยัดพลังงาน)
+    const statChat = document.getElementById("stat-chat");
+    if (statChat) {
+      statChat.classList.add("ok");
+      statChat.style.color = "#00e676"; // Green
+    }
+  });
+
+  // Handle errors / disconnects visually
+  isUsingRelay = true;
+  const statApi = document.getElementById("stat-api");
+  if (statApi) {
+    statApi.innerHTML = '<i class="fa-solid fa-satellite-dish"></i>'; // เปลี่ยนไอคอนเป็นจานดาวเทียมรับสัญญาณ
+    statApi.title = "รับสัญญาณจากเครื่องแม่ (ประหยัด API)";
+    statApi.style.color = "#29b6f6"; // Light Blue
   }
 }
 
@@ -958,6 +1074,7 @@ async function updateViewerCount(vid) {
 
 async function connectYoutube(vid) {
   try {
+    // ใช้ API เรียกแค่ครั้งเดียวเพื่อเอา ID และ Info (ไม่เปลือง Quota)
     const d = await smartFetch(
       `https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${vid}`
     );
@@ -966,7 +1083,6 @@ async function connectYoutube(vid) {
     document.getElementById("live-title").innerText = item.snippet.title;
     saveHistory(vid, item.snippet.title);
 
-    // [NEW] Set Stream Start Time
     if (
       item.liveStreamingDetails &&
       item.liveStreamingDetails.actualStartTime
@@ -977,7 +1093,7 @@ async function connectYoutube(vid) {
     } else {
       streamStartTime = Date.now();
     }
-    fullChatLog = []; // Reset Chat Log
+    fullChatLog = [];
 
     queueSpeech("เชื่อมต่อสำเร็จ กำลังอ่านคอมเมนต์จาก " + item.snippet.title);
     isConnected = true;
@@ -986,10 +1102,26 @@ async function connectYoutube(vid) {
     document.getElementById("btnConnect").innerText = "DISCONNECT";
     document.getElementById("btnConnect").className = "btn btn-dark";
     updateStatusIcon("stat-api", "ok");
+
     if (item.liveStreamingDetails?.activeLiveChatId) {
       activeChatId = item.liveStreamingDetails.activeLiveChatId;
       chatToken = "";
-      loadChat();
+
+      // [NEW] Decision Logic: Commander ยิง API / Viewer รับ Relay
+      if (isAiCommander) {
+        console.log("Mode: Commander (Fetcher)");
+        loadChat(); // Start Polling YouTube
+        isUsingRelay = false;
+      } else {
+        console.log("Mode: Viewer (Listener)");
+        subscribeToChatStream(activeChatId); // Start Listening Firebase
+        isUsingRelay = true;
+        // เปลี่ยนไอคอน API เป็นสีฟ้าแสดงสถานะ Relay
+        document.getElementById("stat-api").innerHTML =
+          '<i class="fa-solid fa-satellite-dish"></i>';
+        document.getElementById("stat-api").style.color = "#29b6f6";
+      }
+
       updateViewerCount(vid);
       viewerIntervalId = setInterval(() => updateViewerCount(vid), 15000);
     } else {
@@ -1010,6 +1142,33 @@ async function connectYoutube(vid) {
 // ============================================================
 // 3. WINDOW EXPORTS
 // ============================================================
+
+// [NEW] Toggle AI Commander (This was missing!)
+window.toggleAICommander = async () => {
+  try {
+    const snap = await get(ref(db, "system/aiCommander"));
+    const current = snap.val();
+
+    if (current === myDeviceId) {
+      // If I am commander, resign.
+      await set(ref(db, "system/aiCommander"), null);
+    } else {
+      // Take command
+      await set(ref(db, "system/aiCommander"), myDeviceId);
+    }
+  } catch (e) {
+    console.error("Error toggling AI Commander:", e);
+    Swal.fire("Error", "ไม่สามารถเปลี่ยนสถานะได้: " + e.message, "error");
+  }
+};
+
+window.scrollToBottom = () => {
+  const vp = document.getElementById("chat-viewport");
+  if (vp) vp.scrollTop = vp.scrollHeight;
+  document.getElementById("btn-scroll-down").style.display = "none";
+  isUserScrolledUp = false;
+};
+
 window.forceUpdate = () => {
   if (confirm("ยืนยันการโหลดโปรแกรมใหม่?")) {
     localStorage.removeItem("app_version");
@@ -1209,10 +1368,21 @@ window.toggleConnection = () => {
     clearInterval(intervalId);
     clearInterval(viewerIntervalId);
     if (chatTimeoutId) clearTimeout(chatTimeoutId);
+    if (unsubscribeChatStream) {
+      unsubscribeChatStream();
+      unsubscribeChatStream = null;
+    }
     isConnected = false;
     document.getElementById("btnConnect").innerText = "CONNECT";
     document.getElementById("btnConnect").className = "btn btn-primary";
     document.getElementById("status-dot").className = "status-dot";
+
+    // Reset Icons
+    document.getElementById("stat-api").innerHTML =
+      '<i class="fa-brands fa-youtube"></i>';
+    document.getElementById("stat-api").style.color = "";
+    document.getElementById("stat-api").classList.remove("ok", "err");
+
     queueSpeech("หยุดการเชื่อมต่อ");
     chatToken = "";
     return;
@@ -1535,27 +1705,21 @@ window.toggleSimulation = () => {
   }
 };
 
-// --- [NEW] Download CSV Function ---
+// CSV Download
 window.downloadChatCSV = () => {
   if (fullChatLog.length === 0) {
     Swal.fire("ไม่มีข้อมูล", "ยังไม่มีข้อความแชทเข้ามา", "warning");
     return;
   }
 
-  // สร้าง Header
   let csvContent = "\uFEFFId,Author name,Comment,Video time,Message time\n";
 
-  // วนลูปสร้างแต่ละแถว
   fullChatLog.forEach((row) => {
-    // Escape เครื่องหมาย " ในคอมเมนต์ ให้เป็น "" เพื่อไม่ให้ CSV พัง
     const safeComment = row.comment ? row.comment.replace(/"/g, '""') : "";
     const safeAuthor = row.author ? row.author.replace(/"/g, '""') : "";
-
-    // จัดรูปแบบแถว: Id, "Author", "Comment", VideoTime, "MessageTime"
     csvContent += `${row.id},"${safeAuthor}","${safeComment}",${row.videoTime},${row.messageTime}\n`;
   });
 
-  // สร้างไฟล์และดาวน์โหลด
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -1566,7 +1730,6 @@ window.downloadChatCSV = () => {
   link.click();
   document.body.removeChild(link);
 };
-// ------------------------------------
 
 // ============================================================
 // 5. EXECUTION START
