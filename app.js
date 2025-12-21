@@ -1,4 +1,4 @@
-// Version: v3.0.1 | แก้ไขปุ่ม AI Commander กดไม่ได้ และแชทไม่ขึ้น
+// Version: v3.0.5 | Logic Adjustment from CSV Analysis
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import {
   getDatabase,
@@ -14,7 +14,7 @@ import {
   runTransaction,
   limitToLast,
   onChildAdded,
-  off,
+  onDisconnect,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
 import {
   getAuth,
@@ -96,7 +96,6 @@ let currentAwayState = false;
 // History
 let allHistoryData = [];
 let historyCurrentPage = 1;
-const historyItemsPerPage = 10;
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
@@ -399,11 +398,21 @@ function syncAiCommanderStatus() {
       isAiCommander = true;
       btn.innerHTML = "🤖 AI: เปิด (Commander)";
       btn.className = "btn btn-ai active";
+      // [FIX] ถ้าเราเป็น Commander ให้ตั้ง OnDisconnect remove
+      onDisconnect(ref(db, "system/aiCommander")).remove();
     } else if (commanderId) {
       isAiCommander = false;
       btn.innerHTML = "🤖 AI: ปิด (Viewer)";
       btn.className = "btn btn-ai remote";
     } else {
+      // [FIX] ถ้าไม่มีใครเป็น Commander และเราต่ออยู่ ให้ Auto Claim
+      if (isConnected) {
+        console.log("No Commander found. Auto-claiming role...");
+        set(ref(db, "system/aiCommander"), myDeviceId);
+        // เดี๋ยว onValue จะเรียกตัวเองอีกรอบและเข้าเคสบน
+        return;
+      }
+
       isAiCommander = false;
       btn.innerHTML = "🤖 AI: ปิด";
       btn.className = "btn btn-ai inactive";
@@ -423,7 +432,7 @@ function syncAiCommanderStatus() {
         loadChat();
         Toast.fire({
           icon: "info",
-          title: "เปลี่ยนเป็นโหมด Commander (ดึงแชทเอง)",
+          title: "คุณเป็นเครื่องแม่ (ดึงแชท)",
         });
       } else if (!isAiCommander && oldIsAiCommander) {
         // Switch to Viewer
@@ -433,7 +442,7 @@ function syncAiCommanderStatus() {
         subscribeToChatStream(activeChatId);
         Toast.fire({
           icon: "success",
-          title: "เปลี่ยนเป็นโหมด Viewer (รับแชทจากแม่ข่าย)",
+          title: "คุณเป็นเครื่องลูก (รับแชท)",
         });
       }
     }
@@ -642,7 +651,11 @@ Key Entities:
 Intents:
 1. **buy**: User wants to purchase an item.
    - Pattern: "[ID]", "F[ID]", "CF[ID]", "รับ [ID]", "[ID] [Name]", "[ID]=[Price]".
-   - Examples: "10", "F10", "10 ครับ", "10 น้องบี", "10 100", "เอา 10".
+   - EXAMPLES (Based on real logs):
+     - "2 วรรณี เบญ" -> Buy ID 2.
+     - "3 ป้าวิภา" -> Buy ID 3.
+     - "10" -> Buy ID 10.
+     - "F10" -> Buy ID 10.
    - CRITICAL EXCEPTION: If the message contains specific question words (เท่าไหร่, ไหม, หรอ, หรือ, ไง) OR specific attribute words (อก, เอว, ยาว, สี, ผ้า, ตำหนิ) appearing alongside a number, it is ALWAYS a "question", NOT a "buy".
      - "50 สีอะไร" -> question
      - "10 อกเท่าไหร่" -> question
@@ -658,7 +671,7 @@ Intents:
    - Examples: "10 ว่างไหม", "อก 50 ไหม", "ขอดู 10", "50 สีอะไร".
 
 4. **shipping**: User wants to ship items.
-   - Keywords: "พร้อมส่ง", "สรุปยอด", "ส่งของ", "คิดเงิน".
+   - Keywords: "พร้อมส่ง", "สรุปยอด", "ส่งของ", "คิดเงิน", "โอนแล้ว", "สลิป".
 
 5. **spam**: Greetings, chit-chat.
 
@@ -701,7 +714,7 @@ function markAsReadyToShip(uid, nick) {
 // MODIFIED PROCESS MESSAGE FUNCTION
 // ============================================================
 async function processMessage(item) {
-  if (!item.snippet || !item.authorDetails) return;
+  if (!item || !item.snippet || !item.authorDetails) return; // Added check for item existence
   if (seenMessageIds[item.id]) return;
   seenMessageIds[item.id] = true;
 
@@ -776,11 +789,11 @@ async function processMessage(item) {
     }
   }
 
-  // 2. Regex Logic (ปรับปรุงใหม่)
+  // 2. Regex Logic (ปรับปรุงใหม่ตาม CSV)
   if (!method) {
-    // [IMPROVED REGEX]
-    // รองรับ Space หรือ Non-Word Characters (สัญลักษณ์, Emoji) เป็นตัวคั่นหน้าตัวเลข
-    // ตัวอย่างที่รองรับ: "F10", "10", "กุ้ง-20", "😱26", "10=100"
+    // [IMPROVED REGEX V3.0.5]
+    // รองรับ: "F10", "10", "2 วรรณี"
+    // ป้องกัน: "เหลือ20" (ต้องมีเว้นวรรคหรือเครื่องหมายคั่นหน้า)
     const buyRegex =
       /(?:^|[\s\p{P}\p{S}])(?:F|f|cf|CF|รับ|เอา)?\s*(\d+)(?:[\s=\/]+(\d+))?(?:$|[\s\p{P}\p{S}])/u;
 
@@ -788,15 +801,15 @@ async function processMessage(item) {
     const cancelRegex =
       /(?:^|[\s\p{P}\p{S}])(?:cc|CC|cancel|ยกเลิก|ไม่เอา|ปล่อย|หลุด)\s*(\d+)(?:$|[\s\p{P}\p{S}])/iu;
 
-    // Regex สำหรับคำถาม (เพิ่มคำว่า "อะไร", "ป่าว", "มั้ย", "ขอดู")
+    // Regex สำหรับคำถาม (เพิ่มคำว่า "อะไร", "ป่าว", "มั้ย", "ขอดู", "แบบไหน")
     const isQuestion =
       /อก|เอว|ยาว|ราคา|เท่าไหร่|ทไหร|กี่บาท|แบบไหน|ผ้า|สี|ตำหนิ|ไหม|มั้ย|มั๊ย|อะไร|ป่าว|ขอดู|จริงดิ/i.test(
         msg
       );
 
-    // [NEW] Regex สำหรับแจ้งส่งของ
+    // [NEW] Regex สำหรับแจ้งส่งของ (เพิ่ม "โอนแล้ว", "สลิป")
     const isShipping =
-      /(?:^|[\s])(?:ส่งเลย|พร้อมส่ง|สรุปยอด|เก็บเงิน|เช็คยอด|ปิดยอด)(?:$|[\s])/i.test(
+      /(?:^|[\s])(?:ส่งเลย|พร้อมส่ง|สรุปยอด|เก็บเงิน|เช็คยอด|ปิดยอด|โอนแล้ว|สลิป)(?:$|[\s])/i.test(
         msg
       );
 
@@ -1000,8 +1013,14 @@ async function loadChat() {
         try {
           // 1. Process Locally
           await processMessage(item);
-          // [NEW] 2. Relay to Firebase for Viewers
-          set(ref(db, `system/chatStream/${activeChatId}/${item.id}`), item);
+          // [FIX] 2. Relay to Firebase (SANITIZE KEY)
+          // REPLACE DOTS IN ID WITH UNDERSCORE
+          const safeId = item.id.replace(/[.#$[\]]/g, "_");
+          const cleanItem = JSON.parse(JSON.stringify(item));
+          set(
+            ref(db, `system/chatStream/${activeChatId}/${safeId}`),
+            cleanItem
+          );
         } catch (err) {
           console.error("Msg Error:", err, item);
         }
@@ -1030,12 +1049,14 @@ function subscribeToChatStream(chatId) {
   unsubscribeChatStream = onChildAdded(chatRef, (snapshot) => {
     const item = snapshot.val();
     // เรียก processMessage เพื่อ render และทำงาน (แต่ถ้าเป็น Viewer มันจะไม่รัน AI ซ้ำตาม Logic ใน processMessage)
-    processMessage(item);
-    // อัปเดตไอคอนเพื่อให้รู้ว่าระบบทำงาน (ใช้สีเขียวแบบประหยัดพลังงาน)
-    const statChat = document.getElementById("stat-chat");
-    if (statChat) {
-      statChat.classList.add("ok");
-      statChat.style.color = "#00e676"; // Green
+    if (item && item.snippet) {
+      processMessage(item);
+      // อัปเดตไอคอนเพื่อให้รู้ว่าระบบทำงาน (ใช้สีเขียวแบบประหยัดพลังงาน)
+      const statChat = document.getElementById("stat-chat");
+      if (statChat) {
+        statChat.classList.add("ok");
+        statChat.style.color = "#00e676"; // Green
+      }
     }
   });
 
@@ -1107,12 +1128,15 @@ async function connectYoutube(vid) {
       activeChatId = item.liveStreamingDetails.activeLiveChatId;
       chatToken = "";
 
-      // [NEW] Decision Logic: Commander ยิง API / Viewer รับ Relay
+      // [FIX] ก่อนเริ่ม ตรวจสอบว่ามี Commander หรือยัง ถ้าไม่มีให้ยึดเลย
+      // (แม้ว่า syncAiCommanderStatus จะทำงาน แต่เพื่อความชัวร์ในการ init)
       if (isAiCommander) {
         console.log("Mode: Commander (Fetcher)");
         loadChat(); // Start Polling YouTube
         isUsingRelay = false;
       } else {
+        // ลองเช็คอีกทีว่ามีใครเป็น Commander ไหม (Fallback)
+        // แต่จริงๆ logic ใน syncAiCommanderStatus จะจัดการ switch ให้เองถ้าเรา claim ได้
         console.log("Mode: Viewer (Listener)");
         subscribeToChatStream(activeChatId); // Start Listening Firebase
         isUsingRelay = true;
@@ -1363,7 +1387,7 @@ window.toggleAwayMode = async () => {
     console.error("Away Mode Error", e);
   }
 };
-window.toggleConnection = () => {
+window.toggleConnection = async () => {
   if (isConnected) {
     clearInterval(intervalId);
     clearInterval(viewerIntervalId);
@@ -1396,6 +1420,20 @@ window.toggleConnection = () => {
   connectToStock(vid);
   set(ref(db, "system/activeVideo"), vid);
   chatToken = "";
+
+  // [FIX] Auto-Claim Commander logic (ถ้าไม่มีใครเป็น ให้เราเป็นเลย)
+  try {
+    const cmdRef = ref(db, "system/aiCommander");
+    const snap = await get(cmdRef);
+    if (!snap.exists() || !snap.val()) {
+      console.log("Auto-claiming empty Commander role...");
+      await set(cmdRef, myDeviceId);
+      // Logic ใน syncAiCommanderStatus จะทำงานและเปลี่ยนโหมดให้เราอัตโนมัติ
+    }
+  } catch (e) {
+    console.error("Auto-claim failed", e);
+  }
+
   connectYoutube(vid).catch((e) => {
     Swal.fire({
       icon: "info",
